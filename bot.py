@@ -686,6 +686,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all messages"""
     message = update.message
     
+    # Log ALL messages received in target group (for debugging)
+    if message.chat.id == TARGET_GROUP_ID:
+        msg_type = "text" if message.text else ("photo" if message.photo else "other")
+        logger.info(f"🔍 Received {msg_type} message - Chat: {message.chat.id}, Thread: {message.message_thread_id}, User: {message.from_user.id} (@{message.from_user.username})")
+    
     if message.chat.id != TARGET_GROUP_ID:
         return
     
@@ -704,11 +709,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if USDT_TRANSFERS_TOPIC_ID:
         # Topic ID is configured, only process messages in that topic
         if message.message_thread_id != USDT_TRANSFERS_TOPIC_ID:
+            logger.info(f"   ⏭️ Skipping: Wrong topic (expected {USDT_TRANSFERS_TOPIC_ID}, got {message.message_thread_id})")
             return
         logger.info(f"📝 Message in USDT Transfers topic from user {message.from_user.id} (@{message.from_user.username})")
     else:
         # Topic ID is 0 or None, process in main chat only (not in any topic)
         if message.message_thread_id is not None:
+            logger.info(f"   ⏭️ Skipping: In topic {message.message_thread_id} (expected main chat)")
             return
         logger.info(f"📝 Message in main chat (USDT Transfers) from user {message.from_user.id} (@{message.from_user.username})")
     
