@@ -284,11 +284,19 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_amount'])
-    await context.bot.send_message(
-        chat_id=TARGET_GROUP_ID,
-        message_thread_id=AUTO_BALANCE_TOPIC_ID,
-        text=new_balance
-    )
+    
+    # Send to auto balance topic if configured, otherwise to main chat
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
     
     context.chat_data['balances'] = balances
     
@@ -399,11 +407,19 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_amount'])
-    await context.bot.send_message(
-        chat_id=TARGET_GROUP_ID,
-        message_thread_id=AUTO_BALANCE_TOPIC_ID,
-        text=new_balance
-    )
+    
+    # Send to auto balance topic if configured, otherwise to main chat
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
     
     context.chat_data['balances'] = balances
     
@@ -539,11 +555,19 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_amount'])
-    await context.bot.send_message(
-        chat_id=TARGET_GROUP_ID,
-        message_thread_id=AUTO_BALANCE_TOPIC_ID,
-        text=new_balance
-    )
+    
+    # Send to auto balance topic if configured, otherwise to main chat
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
     
     context.chat_data['balances'] = balances
     
@@ -636,11 +660,19 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_amount'])
-    await context.bot.send_message(
-        chat_id=TARGET_GROUP_ID,
-        message_thread_id=AUTO_BALANCE_TOPIC_ID,
-        text=new_balance
-    )
+    
+    # Send to auto balance topic if configured, otherwise to main chat
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
     
     context.chat_data['balances'] = balances
     
@@ -657,8 +689,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message.chat.id != TARGET_GROUP_ID:
         return
     
-    # Auto-load balance from auto balance topic
-    if message.message_thread_id == AUTO_BALANCE_TOPIC_ID:
+    # Auto-load balance from auto balance topic (if configured)
+    if AUTO_BALANCE_TOPIC_ID and message.message_thread_id == AUTO_BALANCE_TOPIC_ID:
         if message.text and 'MMK' in message.text and 'USDT' in message.text:
             balances = parse_balance_message(message.text)
             if balances:
@@ -666,9 +698,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"✅ Balance loaded: {len(balances['mmk_banks'])} banks")
         return
     
-    # Process transactions in USDT transfers topic
-    if message.message_thread_id != USDT_TRANSFERS_TOPIC_ID:
-        return
+    # Process transactions in USDT transfers topic OR main chat (if topic ID is 0/None)
+    # If USDT_TRANSFERS_TOPIC_ID is 0 or None, process in main chat (thread_id is None)
+    # Otherwise, only process in the specified topic
+    if USDT_TRANSFERS_TOPIC_ID:
+        # Topic ID is configured, only process messages in that topic
+        if message.message_thread_id != USDT_TRANSFERS_TOPIC_ID:
+            return
+    else:
+        # Topic ID is 0 or None, process in main chat only (not in any topic)
+        if message.message_thread_id is not None:
+            return
     
     if not message.reply_to_message or not message.photo:
         return
@@ -766,6 +806,10 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = message.chat.id
     thread_id = message.message_thread_id if message.message_thread_id else None
     
+    # Determine USDT transfers location
+    usdt_location = "Main Chat (No Topic)" if not USDT_TRANSFERS_TOPIC_ID else f"Topic {USDT_TRANSFERS_TOPIC_ID}"
+    balance_location = "Main Chat (No Topic)" if not AUTO_BALANCE_TOPIC_ID else f"Topic {AUTO_BALANCE_TOPIC_ID}"
+    
     test_result = f"""🧪 <b>Connection Test</b>
 
 <b>Current Message Info:</b>
@@ -775,8 +819,8 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 <b>Bot Configuration:</b>
 • Target Group: <code>{TARGET_GROUP_ID}</code>
-• USDT Transfers Topic: <code>{USDT_TRANSFERS_TOPIC_ID}</code>
-• Auto Balance Topic: <code>{AUTO_BALANCE_TOPIC_ID}</code>
+• USDT Transfers: {usdt_location}
+• Auto Balance: {balance_location}
 
 <b>Connection Status:</b>"""
     
@@ -786,17 +830,27 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         test_result += f"\n❌ Wrong group (expected {TARGET_GROUP_ID})"
     
-    # Check if in correct topic
-    if thread_id == USDT_TRANSFERS_TOPIC_ID:
-        test_result += "\n✅ In USDT Transfers topic"
-    elif thread_id == AUTO_BALANCE_TOPIC_ID:
-        test_result += "\n✅ In Auto Balance topic"
-    elif thread_id:
-        test_result += f"\n⚠️ In different topic (ID: {thread_id})"
+    # Check if in correct location for USDT transfers
+    if USDT_TRANSFERS_TOPIC_ID:
+        # Topic mode
+        if thread_id == USDT_TRANSFERS_TOPIC_ID:
+            test_result += "\n✅ In USDT Transfers topic"
+        elif thread_id == AUTO_BALANCE_TOPIC_ID:
+            test_result += "\n✅ In Auto Balance topic"
+        elif thread_id:
+            test_result += f"\n⚠️ In different topic (ID: {thread_id})"
+        else:
+            test_result += "\n⚠️ In main chat (USDT transfers use topic)"
     else:
-        test_result += "\n⚠️ Not in a topic (main chat)"
+        # Main chat mode
+        if thread_id is None:
+            test_result += "\n✅ In main chat (USDT transfers location)"
+        elif thread_id == AUTO_BALANCE_TOPIC_ID:
+            test_result += "\n✅ In Auto Balance topic"
+        else:
+            test_result += f"\n⚠️ In topic {thread_id} (USDT transfers use main chat)"
     
-    test_result += "\n\n<b>Tip:</b> Send this command in different topics to verify IDs."
+    test_result += "\n\n<b>Tip:</b> Send this command in different locations to verify configuration."
     
     await message.reply_text(test_result, parse_mode='HTML')
     logger.info(f"Test command - Chat: {chat_id}, Thread: {thread_id}")

@@ -76,9 +76,11 @@ MMKKpay P -13,205,369KBZ -11,044,185Wave -6,351,481AYA -0CB -10,000Yoma -0USDTWa
 |----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Your Telegram bot token |
 | `TARGET_GROUP_ID` | Telegram group ID (negative number) |
-| `USDT_TRANSFERS_TOPIC_ID` | Topic ID for transactions |
-| `AUTO_BALANCE_TOPIC_ID` | Topic ID for balance messages |
+| `USDT_TRANSFERS_TOPIC_ID` | Topic ID for transactions (set to 0 for main chat) |
+| `AUTO_BALANCE_TOPIC_ID` | Topic ID for balance messages (set to 0 for main chat) |
 | `OPENAI_API_KEY` | OpenAI API key for GPT-4 Vision |
+
+**Note:** If you don't use topics in your Telegram group, set `USDT_TRANSFERS_TOPIC_ID` and `AUTO_BALANCE_TOPIC_ID` to `0` to use the main chat instead.
 
 ## Bank Recognition
 
