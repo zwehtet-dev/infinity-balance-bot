@@ -705,21 +705,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Topic ID is configured, only process messages in that topic
         if message.message_thread_id != USDT_TRANSFERS_TOPIC_ID:
             return
+        logger.info(f"📝 Message in USDT Transfers topic from user {message.from_user.id} (@{message.from_user.username})")
     else:
         # Topic ID is 0 or None, process in main chat only (not in any topic)
         if message.message_thread_id is not None:
             return
+        logger.info(f"📝 Message in main chat (USDT Transfers) from user {message.from_user.id} (@{message.from_user.username})")
+    
+    # Log message details
+    has_photo = bool(message.photo)
+    is_reply = bool(message.reply_to_message)
+    message_text = (message.text or message.caption or "")[:50]
+    
+    logger.info(f"   Has photo: {has_photo}, Is reply: {is_reply}, Text: '{message_text}...'")
     
     if not message.reply_to_message or not message.photo:
+        logger.info(f"   ⏭️ Skipping: Not a photo reply")
         return
     
     original_text = message.reply_to_message.text or message.reply_to_message.caption
     if not original_text:
+        logger.info(f"   ⏭️ Skipping: Original message has no text")
         return
+    
+    logger.info(f"   Original message: '{original_text[:80]}...'")
     
     # Check if this is part of a media group (bulk photos sent together)
     if message.media_group_id:
-        logger.info(f"📸 Media group detected: {message.media_group_id}")
+        logger.info(f"   📸 Media group detected: {message.media_group_id}")
         
         # Initialize media group storage if not exists
         if message.media_group_id not in media_groups:
@@ -728,15 +741,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'message': message,
                 'original_text': original_text
             }
+            logger.info(f"   📦 Created new media group storage")
         
         # Add this photo to the group
         media_groups[message.media_group_id]['photos'].append(message.photo[-1])
         photo_count = len(media_groups[message.media_group_id]['photos'])
-        logger.info(f"Added photo to media group. Total photos: {photo_count}")
+        logger.info(f"   ➕ Added photo to media group. Total photos: {photo_count}")
         
         # Only schedule processing once (from the first photo)
         if photo_count == 1:
-            logger.info(f"Scheduling media group processing for {message.media_group_id}")
+            logger.info(f"   ⏰ Scheduling media group processing for {message.media_group_id}")
             import asyncio
             asyncio.create_task(process_media_group_delayed(update, context, message.media_group_id))
         
@@ -746,7 +760,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_info = extract_transaction_info(original_text)
     
     if not tx_info['type'] or not tx_info['usdt'] or not tx_info['mmk']:
+        logger.info(f"   ⏭️ Skipping: Not a valid Buy/Sell transaction message")
         return
+    
+    logger.info(f"   🔄 Processing {tx_info['type'].upper()} transaction: {tx_info['usdt']} USDT = {tx_info['mmk']:,.0f} MMK")
     
     if tx_info['type'] == 'buy':
         await process_buy_transaction(update, context, tx_info)
