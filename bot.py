@@ -686,6 +686,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all messages"""
     message = update.message
     
+    # Skip if no message (e.g., edited message, channel post, etc.)
+    if not message:
+        return
+    
     # Log ALL messages received in target group (for debugging)
     if message.chat.id == TARGET_GROUP_ID:
         msg_type = "text" if message.text else ("photo" if message.photo else "other")
@@ -703,19 +707,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"✅ Balance loaded: {len(balances['mmk_banks'])} banks")
         return
     
-    # Process transactions in USDT transfers topic OR main chat (if topic ID is 0/None)
-    # If USDT_TRANSFERS_TOPIC_ID is 0 or None, process in main chat (thread_id is None)
+    # Process transactions in USDT transfers topic OR main chat (if topic ID is 0/None/1)
+    # Note: Topic 1 (General) sometimes reports as None in the API
+    # If USDT_TRANSFERS_TOPIC_ID is 0, None, or 1, process in main chat (thread_id is None or 1)
     # Otherwise, only process in the specified topic
-    if USDT_TRANSFERS_TOPIC_ID:
-        # Topic ID is configured, only process messages in that topic
-        if message.message_thread_id != USDT_TRANSFERS_TOPIC_ID:
-            logger.info(f"   ⏭️ Skipping: Wrong topic (expected {USDT_TRANSFERS_TOPIC_ID}, got {message.message_thread_id})")
+    
+    # Normalize thread_id: treat None as 1 for General topic
+    current_thread_id = message.message_thread_id if message.message_thread_id is not None else 1
+    
+    if USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1:
+        # Specific topic configured (not main chat)
+        if current_thread_id != USDT_TRANSFERS_TOPIC_ID:
+            logger.info(f"   ⏭️ Skipping: Wrong topic (expected {USDT_TRANSFERS_TOPIC_ID}, got {current_thread_id})")
             return
-        logger.info(f"📝 Message in USDT Transfers topic from user {message.from_user.id} (@{message.from_user.username})")
+        logger.info(f"📝 Message in USDT Transfers topic {USDT_TRANSFERS_TOPIC_ID} from user {message.from_user.id} (@{message.from_user.username})")
     else:
-        # Topic ID is 0 or None, process in main chat only (not in any topic)
-        if message.message_thread_id is not None:
-            logger.info(f"   ⏭️ Skipping: In topic {message.message_thread_id} (expected main chat)")
+        # Main chat mode (topic 0, 1, or None)
+        # Accept both None and 1 as main chat (General topic)
+        if current_thread_id != 1:
+            logger.info(f"   ⏭️ Skipping: In topic {current_thread_id} (expected main chat/topic 1)")
             return
         logger.info(f"📝 Message in main chat (USDT Transfers) from user {message.from_user.id} (@{message.from_user.username})")
     
@@ -830,15 +840,22 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = message.chat.id
     thread_id = message.message_thread_id if message.message_thread_id else None
     
+    # Normalize thread_id: treat None as 1 for General topic
+    normalized_thread_id = thread_id if thread_id is not None else 1
+    
     # Determine USDT transfers location
-    usdt_location = "Main Chat (No Topic)" if not USDT_TRANSFERS_TOPIC_ID else f"Topic {USDT_TRANSFERS_TOPIC_ID}"
+    if not USDT_TRANSFERS_TOPIC_ID or USDT_TRANSFERS_TOPIC_ID <= 1:
+        usdt_location = "Main Chat (Topic 1/General)"
+    else:
+        usdt_location = f"Topic {USDT_TRANSFERS_TOPIC_ID}"
+    
     balance_location = "Main Chat (No Topic)" if not AUTO_BALANCE_TOPIC_ID else f"Topic {AUTO_BALANCE_TOPIC_ID}"
     
     test_result = f"""🧪 <b>Connection Test</b>
 
 <b>Current Message Info:</b>
 • Chat ID: <code>{chat_id}</code>
-• Thread ID: <code>{thread_id}</code>
+• Thread ID: <code>{thread_id}</code> (normalized: {normalized_thread_id})
 • Chat Type: {message.chat.type}
 
 <b>Bot Configuration:</b>
@@ -855,24 +872,22 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         test_result += f"\n❌ Wrong group (expected {TARGET_GROUP_ID})"
     
     # Check if in correct location for USDT transfers
-    if USDT_TRANSFERS_TOPIC_ID:
-        # Topic mode
-        if thread_id == USDT_TRANSFERS_TOPIC_ID:
+    if USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1:
+        # Specific topic mode (not main chat)
+        if normalized_thread_id == USDT_TRANSFERS_TOPIC_ID:
             test_result += "\n✅ In USDT Transfers topic"
-        elif thread_id == AUTO_BALANCE_TOPIC_ID:
+        elif normalized_thread_id == AUTO_BALANCE_TOPIC_ID:
             test_result += "\n✅ In Auto Balance topic"
-        elif thread_id:
-            test_result += f"\n⚠️ In different topic (ID: {thread_id})"
         else:
-            test_result += "\n⚠️ In main chat (USDT transfers use topic)"
+            test_result += f"\n⚠️ In different topic (ID: {normalized_thread_id}, expected {USDT_TRANSFERS_TOPIC_ID})"
     else:
-        # Main chat mode
-        if thread_id is None:
-            test_result += "\n✅ In main chat (USDT transfers location)"
-        elif thread_id == AUTO_BALANCE_TOPIC_ID:
+        # Main chat mode (topic 1 or None)
+        if normalized_thread_id == 1:
+            test_result += "\n✅ In main chat/General topic (USDT transfers location)"
+        elif normalized_thread_id == AUTO_BALANCE_TOPIC_ID:
             test_result += "\n✅ In Auto Balance topic"
         else:
-            test_result += f"\n⚠️ In topic {thread_id} (USDT transfers use main chat)"
+            test_result += f"\n⚠️ In topic {normalized_thread_id} (USDT transfers use main chat/topic 1)"
     
     test_result += "\n\n<b>Tip:</b> Send this command in different locations to verify configuration."
     
