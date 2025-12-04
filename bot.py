@@ -707,27 +707,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"✅ Balance loaded: {len(balances['mmk_banks'])} banks")
         return
     
-    # Process transactions in USDT transfers topic OR main chat (if topic ID is 0/None/1)
-    # Note: Topic 1 (General) sometimes reports as None in the API
-    # If USDT_TRANSFERS_TOPIC_ID is 0, None, or 1, process in main chat (thread_id is None or 1)
-    # Otherwise, only process in the specified topic
+    # Process transactions in USDT transfers topic OR main chat
+    # Note: In Telegram forum groups, when you reply to a message, the thread_id becomes the message_id of the original message
+    # So we need to check if this is a reply, and if so, verify the original message location
     
     # Normalize thread_id: treat None as 1 for General topic
     current_thread_id = message.message_thread_id if message.message_thread_id is not None else 1
     
-    if USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1:
-        # Specific topic configured (not main chat)
-        if current_thread_id != USDT_TRANSFERS_TOPIC_ID:
-            logger.info(f"   ⏭️ Skipping: Wrong topic (expected {USDT_TRANSFERS_TOPIC_ID}, got {current_thread_id})")
-            return
-        logger.info(f"📝 Message in USDT Transfers topic {USDT_TRANSFERS_TOPIC_ID} from user {message.from_user.id} (@{message.from_user.username})")
+    # Determine if this message is in the correct location
+    is_valid_location = False
+    location_description = ""
+    
+    # Check if this is a reply to another message
+    if message.reply_to_message:
+        # For replies, check where the ORIGINAL message was posted
+        original_thread_id = message.reply_to_message.message_thread_id if message.reply_to_message.message_thread_id is not None else 1
+        
+        if USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1:
+            # Specific topic mode
+            if original_thread_id == USDT_TRANSFERS_TOPIC_ID:
+                is_valid_location = True
+                location_description = f"Reply to message in USDT Transfers topic {USDT_TRANSFERS_TOPIC_ID}"
+        else:
+            # Main chat mode (topic 1)
+            if original_thread_id == 1:
+                is_valid_location = True
+                location_description = f"Reply to message in main chat (thread_id: {current_thread_id})"
     else:
-        # Main chat mode (topic 0, 1, or None)
-        # Accept both None and 1 as main chat (General topic)
-        if current_thread_id != 1:
-            logger.info(f"   ⏭️ Skipping: In topic {current_thread_id} (expected main chat/topic 1)")
-            return
-        logger.info(f"📝 Message in main chat (USDT Transfers) from user {message.from_user.id} (@{message.from_user.username})")
+        # Not a reply, check current location
+        if USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1:
+            # Specific topic mode
+            if current_thread_id == USDT_TRANSFERS_TOPIC_ID:
+                is_valid_location = True
+                location_description = f"Message in USDT Transfers topic {USDT_TRANSFERS_TOPIC_ID}"
+        else:
+            # Main chat mode (topic 1)
+            if current_thread_id == 1:
+                is_valid_location = True
+                location_description = f"Message in main chat"
+    
+    if is_valid_location:
+        logger.info(f"📝 {location_description} from user {message.from_user.id} (@{message.from_user.username})")
+    else:
+        expected = f"topic {USDT_TRANSFERS_TOPIC_ID}" if (USDT_TRANSFERS_TOPIC_ID and USDT_TRANSFERS_TOPIC_ID > 1) else "main chat/topic 1"
+        logger.info(f"   ⏭️ Skipping: Wrong location (thread: {current_thread_id}, expected: {expected})")
+        return
     
     # Log message details
     has_photo = bool(message.photo)
