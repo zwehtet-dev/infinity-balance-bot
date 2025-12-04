@@ -726,7 +726,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Commands:</b>\n"
         "/start - Status\n"
         "/balance - Show current balance\n"
-        "/load - Load balance from message",
+        "/load - Load balance from message\n"
+        "/test - Test connection and configuration",
         parse_mode='HTML'
     )
 
@@ -759,6 +760,47 @@ async def load_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Could not parse balance")
 
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test command to verify group and topic configuration"""
+    message = update.message
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id if message.message_thread_id else None
+    
+    test_result = f"""🧪 <b>Connection Test</b>
+
+<b>Current Message Info:</b>
+• Chat ID: <code>{chat_id}</code>
+• Thread ID: <code>{thread_id}</code>
+• Chat Type: {message.chat.type}
+
+<b>Bot Configuration:</b>
+• Target Group: <code>{TARGET_GROUP_ID}</code>
+• USDT Transfers Topic: <code>{USDT_TRANSFERS_TOPIC_ID}</code>
+• Auto Balance Topic: <code>{AUTO_BALANCE_TOPIC_ID}</code>
+
+<b>Connection Status:</b>"""
+    
+    # Check if in correct group
+    if chat_id == TARGET_GROUP_ID:
+        test_result += "\n✅ In correct group"
+    else:
+        test_result += f"\n❌ Wrong group (expected {TARGET_GROUP_ID})"
+    
+    # Check if in correct topic
+    if thread_id == USDT_TRANSFERS_TOPIC_ID:
+        test_result += "\n✅ In USDT Transfers topic"
+    elif thread_id == AUTO_BALANCE_TOPIC_ID:
+        test_result += "\n✅ In Auto Balance topic"
+    elif thread_id:
+        test_result += f"\n⚠️ In different topic (ID: {thread_id})"
+    else:
+        test_result += "\n⚠️ Not in a topic (main chat)"
+    
+    test_result += "\n\n<b>Tip:</b> Send this command in different topics to verify IDs."
+    
+    await message.reply_text(test_result, parse_mode='HTML')
+    logger.info(f"Test command - Chat: {chat_id}, Thread: {thread_id}")
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -770,11 +812,12 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("balance", balance_command))
     app.add_handler(CommandHandler("load", load_command))
+    app.add_handler(CommandHandler("test", test_command))
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     
     logger.info("🤖 Infinity Balance Bot Started")
-    logger.info(f"📡 Group: {TARGET_GROUP_ID}")
-    logger.info(f"📝 USDT Topic: {USDT_TRANSFERS_TOPIC_ID}")
+    logger.info(f"� Grou p: {TARGET_GROUP_ID}")
+    logger.info(f"�  USDT Topic: {USDT_TRANSFERS_TOPIC_ID}")
     logger.info(f"📊 Balance Topic: {AUTO_BALANCE_TOPIC_ID}")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
