@@ -1,0 +1,43 @@
+MMK
+1.CB M 
+2.CB
+3.AYA M
+4.AYA 
+5.AYA Wallet
+6.Wave 
+7.Wave M 
+8.Wave Channel 
+
+USDT
+1.Swift 
+2.Binance
+
+
+MMK
+San(Kpay P) -2639565
+San(CB M) -0
+San(CB)-10000
+San(KBZ)-11044185
+San(AYA M )-0
+San(AYA) -0
+San(AYA Wallet) -0
+San(Wave) -0
+San(Wave M )-1220723
+San(Wave Channel) - 1970347
+San(Yoma)-0
+NDT (Wave) -2864900
+MMM (Kpay p)-8839154
+
+USDT
+San(Swift) -81.99
+MMN(Binance)-(15.86)
+NDT(Binance)-6.96(52.96)
+TZT (Binance)-(222.6)
+PPK (Binance) - 0
+ACT(Wallet)-1104.9051
+OKM(Swift) -5000
+
+THB
+ACT(Bkk B) - 13223
+
+24.933896

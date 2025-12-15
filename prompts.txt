@@ -1,0 +1,86 @@
+I want to update bot.
+current , get latest message in auto balance topic, 
+but now, message template is change as 
+```
+MMK
+San(Kpay P) -2639565
+San(CB M) -0
+San(CB)-10000
+San(KBZ)-11044185
+San(AYA M )-0
+San(AYA) -0
+San(AYA Wallet) -0
+San(Wave) -0
+San(Wave M )-1220723
+San(Wave Channel) - 1970347
+San(Yoma)-0
+NDT (Wave) -2864900
+MMM (Kpay p)-8839154
+
+USDT
+San(Swift) -81.99
+MMN(Binance)-(15.86)
+NDT(Binance)-6.96(52.96)
+TZT (Binance)-(222.6)
+PPK (Binance) - 0
+ACT(Wallet)-1104.9051
+OKM(Swift) -5000
+
+THB
+ACT(Bkk B) - 13223
+```
+see about message , 
+client want to do that, if staff reply sale message, bot check staff name,
+if 'San', have to update San`banks . eg. if ocr detect KBZ and replied staff name is San, have to update `San(KBZ)-11044185`,
+if 'Thin Zar Htet', have to update TZT` banks,
+if 'MMN' , have to update MMN` banks,
+if 'Nandar', have to update NDT` banks,
+etc ...
+for that, I have idea for that, 
+bot must be use sqlite db and create store command 
+as /set-user @user {prefix_name_in_balance_topic}
+and then bot must be store user id and prefix_name in database, 
+when staff reply , get prefix name by user id and update balance message
+
+and bot must be handle new feature ,
+bot must be handle for new topic 'Accounts Matter', 
+they use this topic intenal bank transfer,
+staff send as 
+```
+[receipts]
+San(Wave Channel) to NDT (Wave)
+```
+for that bot must be detect amount from receipts and have to reduce San(Wave Channel) amount and have to increate NDT (Wave) amount 
+and then have to notify to auto balance topic with new balance
+and usdt amount can be wrong in 0.03
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+K Pay P account holders - San, Thin Zar Htet
+
+Wave account holders - San, Nandar (NDT)
+
+Wave Channel account holders - San
+
+
+For USDT Transfer, 
+ACT Wallet is for receiving, and Swift is for sending. (Swift is also Wallet and used for sending)
+
+In Account Matter Topic, it is a topic for transferring between admin bank accounts
+
+CSTZ = San
+
+USD margin for 0.03
+
+

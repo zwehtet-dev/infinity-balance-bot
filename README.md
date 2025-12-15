@@ -1,14 +1,16 @@
 # Infinity Balance Bot
 
-Clean, minimal Telegram bot for managing MMK and USDT balances independently (no backend required).
+Clean, minimal Telegram bot for managing MMK and USDT balances independently with staff-specific tracking.
 
 ## Features
 
-- ✅ **Independent Mode**: No database, balances stored in Telegram messages
+- ✅ **Staff-Specific Tracking**: Each staff member has their own bank accounts
 - 🔍 **OCR Recognition**: Automatic bank detection from receipts using GPT-4 Vision
-- 💱 **Buy/Sell Processing**: Handles both transaction types
+- 💱 **Buy/Sell Processing**: Handles both transaction types with staff attribution
 - 📊 **Auto Balance Loading**: Reads balance from auto balance topic
-- 🏦 **Multi-Bank Support**: CB, KBZ, Kpay, Kpay Partner, Wave, AYA, Yoma
+- 🏦 **Multi-Bank Support**: CB, KBZ, Kpay, Kpay Partner, Wave, AYA, Yoma, Binance
+- 🔄 **Internal Transfers**: Transfer between staff accounts in Accounts Matter topic
+- 💾 **SQLite Database**: Stores user-to-prefix mappings
 
 ## Setup
 
@@ -32,43 +34,88 @@ python bot.py
 
 ## Balance Message Format
 
-Single-line format:
+New format with staff prefixes:
 ```
-MMKKpay P -13,205,369KBZ -11,044,185Wave -6,351,481AYA -0CB -10,000Yoma -0USDTWallet -5607.1401
+San(Kpay P) -2639565
+San(CB M) -0
+San(KBZ)-11044185
+San(AYA M )-0
+San(Wave) -0
+San(Wave M )-1220723
+San(Wave Channel) - 1970347
+NDT (Wave) -2864900
+MMM (Kpay p)-8839154
+
+USDT
+San(Swift) -81.99
+MMN(Binance)-(15.86)
+NDT(Binance)-6.96
+TZT (Binance)-(222.6)
+PPK (Binance) - 0
 ```
+
+**Format:** `Prefix(BankName) -amount`
+- **Prefix**: Staff identifier (San, TZT, MMN, NDT, etc.)
+- **BankName**: Bank or wallet name
+- **Amount**: Balance amount (MMK as integer, USDT with 2 decimals)
 
 ## Usage
 
 ### Initialize
 1. Post balance message in auto balance topic
 2. Bot auto-loads it
+3. Set up staff mappings using `/set_user` command
+
+### Set Up Staff Members
+Reply to a staff member's message with:
+```
+/set_user San
+/set_user TZT
+/set_user MMN
+/set_user NDT
+```
 
 ### Buy Transaction (User buys USDT)
 1. User posts: "Buy 100 = 235,000"
 2. Staff replies with MMK receipt photo
-3. Bot processes and updates balance
+3. Bot detects staff prefix and updates their specific bank
+4. Posts updated balance to auto balance topic
 
 ### Sell Transaction (User sells USDT)
 1. User posts: "Sell 100 = 235,000" with MMK receipt
 2. Staff replies with USDT receipt photo
-3. Bot processes and updates balance
+3. Bot updates staff's specific bank and USDT balance
+4. Posts updated balance to auto balance topic
+
+### Internal Transfer
+In Accounts Matter topic:
+```
+San(Wave Channel) to NDT (Wave)
+[attach receipt photo]
+```
+Bot detects amount, transfers between accounts, and updates balance
 
 ## Commands
 
 - `/start` - Check bot status
 - `/balance` - Show current balance
 - `/load` - Load balance from message (reply to balance message)
+- `/set_user <prefix>` - Set user prefix (reply to user's message)
+- `/test` - Test connection and configuration
 
 ## How It Works
 
 1. **Balance Storage**: Balances stored as Telegram messages in auto balance topic
-2. **OCR Processing**: GPT-4 Vision analyzes receipts to detect bank and amount
-3. **Transaction Flow**:
+2. **User Mapping**: SQLite database stores user_id → prefix_name mappings
+3. **OCR Processing**: GPT-4 Vision analyzes receipts to detect bank and amount
+4. **Transaction Flow**:
    - Extract transaction info from message
-   - OCR receipt(s)
+   - Get staff prefix from database
+   - OCR receipt(s) filtered by staff prefix
    - Verify amounts
-   - Update balance
+   - Update staff-specific balance
    - Post new balance message
+5. **Internal Transfers**: Detect transfer format, OCR amount, update both accounts
 
 ## Environment Variables
 
@@ -78,9 +125,10 @@ MMKKpay P -13,205,369KBZ -11,044,185Wave -6,351,481AYA -0CB -10,000Yoma -0USDTWa
 | `TARGET_GROUP_ID` | Telegram group ID (negative number) |
 | `USDT_TRANSFERS_TOPIC_ID` | Topic ID for transactions (set to 0 for main chat) |
 | `AUTO_BALANCE_TOPIC_ID` | Topic ID for balance messages (set to 0 for main chat) |
+| `ACCOUNTS_MATTER_TOPIC_ID` | Topic ID for internal transfers |
 | `OPENAI_API_KEY` | OpenAI API key for GPT-4 Vision |
 
-**Note:** If you don't use topics in your Telegram group, set `USDT_TRANSFERS_TOPIC_ID` and `AUTO_BALANCE_TOPIC_ID` to `0` to use the main chat instead.
+**Note:** If you don't use topics in your Telegram group, set topic IDs to `0` to use the main chat instead.
 
 ## Bank Recognition
 
@@ -92,6 +140,46 @@ The bot recognizes banks by visual features:
 - **Wave**: YELLOW header or green "Successful"
 - **AYA**: "Payment Complete" or "AYA PAY" logo
 - **Yoma**: "Flexi Everyday Account" text
+- **Binance**: Crypto exchange interface
+
+## Staff Prefix Examples
+
+Common staff prefixes used in the system:
+- **San**: Main staff member
+- **TZT**: Thin Zar Htet
+- **MMN**: Staff member MMN
+- **NDT**: Nandar
+- **MMM**: Staff member MMM
+- **PPK**: Staff member PPK
+
+## Database
+
+The bot uses SQLite (`bot_data.db`) to store:
+- User ID to prefix name mappings
+- Username for reference
+- Creation timestamps
+
+Database is automatically created on first run.
+
+## New Features
+
+### USDT Tolerance
+- USDT transactions allow up to **0.03** difference for matching
+- Accounts for small discrepancies in crypto transactions
+
+### Multiple Receipt Support
+- Send multiple photos as a media group for split payments
+- Bot accumulates amounts from all receipts
+- Verifies total matches expected amount
+
+## Detailed Documentation
+
+See [UPDATES.md](UPDATES.md) for:
+- Complete feature documentation
+- Setup instructions
+- Usage examples
+- Migration guide
+- Troubleshooting
 
 ## License
 
