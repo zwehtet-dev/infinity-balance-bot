@@ -731,11 +731,13 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
         return
     
     if not message.photo:
-        await message.reply_text("❌ No receipt photo")
+        # await message.reply_text("❌ No receipt photo")
+        logger.error("No receipt photo")
         return
     
     # Get staff prefix
@@ -743,7 +745,8 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
         return
     
     original_message_id = message.reply_to_message.message_id
@@ -759,7 +762,8 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     result = await ocr_detect_mmk_bank_and_amount(photo_base64, balances['mmk_banks'], user_prefix)
     
     if not result:
-        await message.reply_text("❌ Could not detect bank/amount")
+        # await message.reply_text("❌ Could not detect bank/amount")
+        logger.error("Could not detect bank/amount")
         return
     
     detected_mmk = result['amount']
@@ -787,16 +791,17 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     # Check if total amount matches (allow 100 MMK difference)
     if abs(total_detected_mmk - tx_info['mmk']) > 100:
-        await message.reply_text(
-            f"📝 Received {photo_count} photo(s)\n"
-            f"Total: {total_detected_mmk:,.0f} MMK\n"
-            f"Expected: {tx_info['mmk']:,.0f} MMK\n\n"
-            f"⏳ Send more photos if needed"
-        )
+        # await message.reply_text(
+        #     f"📝 Received {photo_count} photo(s)\n"
+        #     f"Total: {total_detected_mmk:,.0f} MMK\n"
+        #     f"Expected: {tx_info['mmk']:,.0f} MMK\n\n"
+        #     f"⏳ Send more photos if needed"
+        # )
+        logger.info(f"Received {photo_count} photo(s), Total: {total_detected_mmk:,.0f} MMK, Expected: {tx_info['mmk']:,.0f} MMK - waiting for more photos")
         return
     
     # Amount matches! Process the transaction
-    await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_mmk:,.0f} MMK\n\nProcessing...")
+    # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_mmk:,.0f} MMK\n\nProcessing...")
     
     # Check if sufficient balance before reducing
     bank_found = False
@@ -804,12 +809,13 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         if bank['bank_name'] == detected_bank['bank_name']:
             bank_found = True
             if bank['amount'] < total_detected_mmk:
-                await message.reply_text(
-                    f"❌ Insufficient balance!\n\n"
-                    f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
-                    f"Required: {total_detected_mmk:,.0f} MMK\n"
-                    f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
-                )
+                # await message.reply_text(
+                #     f"❌ Insufficient balance!\n\n"
+                #     f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
+                #     f"Required: {total_detected_mmk:,.0f} MMK\n"
+                #     f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
+                # )
+                logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_detected_mmk:,.0f} MMK, Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK")
                 # Clean up pending transaction
                 if original_message_id in pending_transactions:
                     del pending_transactions[original_message_id]
@@ -818,7 +824,8 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             break
     
     if not bank_found:
-        await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
+        # await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
+        logger.error(f"Bank not found: {detected_bank['bank_name']}")
         if original_message_id in pending_transactions:
             del pending_transactions[original_message_id]
         return
@@ -836,7 +843,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     if not usdt_updated:
         logger.warning(f"Receiving USDT account not found: {receiving_usdt_account}")
-        await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
+        # await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -856,11 +863,11 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ Buy processed!\n\n"
-        f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-        f"USDT: +{tx_info['usdt']:.4f}"
-    )
+    # await message.reply_text(
+    #     f"✅ Buy processed!\n\n"
+    #     f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
+    #     f"USDT: +{tx_info['usdt']:.4f}"
+    # )
     
     # Clean up pending transaction
     if original_message_id in pending_transactions:
@@ -872,7 +879,8 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded")
+        # await message.reply_text("❌ Balance not loaded")
+        logger.error("Balance not loaded")
         return
     
     # Get staff prefix
@@ -880,13 +888,15 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
         return
     
     # Get user's MMK receipt
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
-        await message.reply_text("❌ Original message has no receipt")
+        # await message.reply_text("❌ Original message has no receipt")
+        logger.error("Original message has no receipt")
         return
     
     # OCR user's receipt (only once, not accumulated)
@@ -898,7 +908,8 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
     
     if not user_result:
-        await message.reply_text("❌ Could not detect bank/amount from user receipt")
+        # await message.reply_text("❌ Could not detect bank/amount from user receipt")
+        logger.error("Could not detect bank/amount from user receipt")
         return
     
     detected_mmk = user_result['amount']
@@ -906,16 +917,18 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     # Verify MMK
     if abs(detected_mmk - tx_info['mmk']) > 100:
-        await message.reply_text(
-            f"⚠️ MMK mismatch!\n"
-            f"Expected: {tx_info['mmk']:,.0f}\n"
-            f"Detected: {detected_mmk:,.0f}"
-        )
+        # await message.reply_text(
+        #     f"⚠️ MMK mismatch!\n"
+        #     f"Expected: {tx_info['mmk']:,.0f}\n"
+        #     f"Detected: {detected_mmk:,.0f}"
+        # )
+        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {detected_mmk:,.0f}")
         return
     
     # Get staff's USDT receipt(s) - support multiple photos
     if not message.photo:
-        await message.reply_text("❌ No USDT receipt")
+        # await message.reply_text("❌ No USDT receipt")
+        logger.error("No USDT receipt")
         return
     
     original_message_id = message.reply_to_message.message_id
@@ -929,7 +942,8 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     usdt_result = await ocr_extract_usdt_with_fee(staff_base64)
     
     if not usdt_result:
-        await message.reply_text("❌ Could not detect USDT amount")
+        # await message.reply_text("❌ Could not detect USDT amount")
+        logger.error("Could not detect USDT amount")
         return
     
     detected_usdt = usdt_result['total_amount']  # Use total (amount + network fee)
@@ -958,16 +972,17 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     # Check if USDT amount matches (allow 0.03 tolerance for USDT)
     if abs(total_detected_usdt - tx_info['usdt']) > 0.03:
-        await message.reply_text(
-            f"📝 Received {photo_count} photo(s)\n"
-            f"Total: {total_detected_usdt:.4f} USDT\n"
-            f"Expected: {tx_info['usdt']:.4f} USDT\n\n"
-            f"⏳ Send more photos if needed"
-        )
+        # await message.reply_text(
+        #     f"📝 Received {photo_count} photo(s)\n"
+        #     f"Total: {total_detected_usdt:.4f} USDT\n"
+        #     f"Expected: {tx_info['usdt']:.4f} USDT\n\n"
+        #     f"⏳ Send more photos if needed"
+        # )
+        logger.info(f"Received {photo_count} photo(s), Total: {total_detected_usdt:.4f} USDT, Expected: {tx_info['usdt']:.4f} USDT - waiting for more photos")
         return
     
     # Amount matches! Process the transaction
-    await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_usdt:.4f} USDT\n\nProcessing...")
+    # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
     # Update balances for the specific staff member's bank
     for bank in balances['mmk_banks']:
@@ -998,12 +1013,13 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
             if type_matches:
                 # Check if sufficient USDT balance
                 if bank['amount'] < total_detected_usdt:
-                    await message.reply_text(
-                        f"❌ Insufficient USDT balance!\n\n"
-                        f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
-                        f"Required: {total_detected_usdt:.4f} USDT\n"
-                        f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
-                    )
+                    # await message.reply_text(
+                    #     f"❌ Insufficient USDT balance!\n\n"
+                    #     f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                    #     f"Required: {total_detected_usdt:.4f} USDT\n"
+                    #     f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
+                    # )
+                    logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
                     # Clean up pending transaction
                     if original_message_id in pending_transactions:
                         del pending_transactions[original_message_id]
@@ -1034,11 +1050,11 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ Sell processed!\n\n"
-        f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-        f"USDT: -{total_detected_usdt:.4f}"
-    )
+    # await message.reply_text(
+    #     f"✅ Sell processed!\n\n"
+    #     f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
+    #     f"USDT: -{total_detected_usdt:.4f}"
+    # )
     
     # Clean up pending transaction
     if original_message_id in pending_transactions:
@@ -1056,11 +1072,13 @@ async def process_internal_transfer(update: Update, context: ContextTypes.DEFAUL
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded")
+        # await message.reply_text("❌ Balance not loaded")
+        logger.error("Balance not loaded")
         return
     
     if not message.photo:
-        await message.reply_text("❌ No receipt photo")
+        # await message.reply_text("❌ No receipt photo")
+        logger.error("No receipt photo")
         return
     
     # Parse transfer text
@@ -1106,7 +1124,8 @@ async def process_internal_transfer(update: Update, context: ContextTypes.DEFAUL
                 usdt_result = await ocr_extract_usdt_with_fee(photo_base64)
                 
                 if not usdt_result:
-                    await message.reply_text("❌ Could not detect USDT amount")
+                    # await message.reply_text("❌ Could not detect USDT amount")
+                    logger.error("Could not detect USDT amount")
                     return
                 
                 # For Swift/Wallet to Binance: use total amount (includes network fee)
@@ -1180,7 +1199,7 @@ Note: Return the amount as a positive number, ignore any minus signs."""
         logger.error(f"Amount detection error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        await message.reply_text("❌ Could not detect transfer amount")
+        # await message.reply_text("❌ Could not detect transfer amount")
         return
     
     # Find and update source bank
@@ -1197,20 +1216,23 @@ Note: Return the amount as a positive number, ignore any minus signs."""
             to_bank_obj = bank
     
     if not from_bank_obj:
-        await message.reply_text(f"❌ Source bank not found: {from_full_name}")
+        # await message.reply_text(f"❌ Source bank not found: {from_full_name}")
+        logger.error(f"Source bank not found: {from_full_name}")
         return
     
     if not to_bank_obj:
-        await message.reply_text(f"❌ Destination bank not found: {to_full_name}")
+        # await message.reply_text(f"❌ Destination bank not found: {to_full_name}")
+        logger.error(f"Destination bank not found: {to_full_name}")
         return
     
     # Check if sufficient balance
     if from_bank_obj['amount'] < amount:
-        await message.reply_text(
-            f"⚠️ Insufficient balance!\n"
-            f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
-            f"Transfer: {amount:,.2f}"
-        )
+        # await message.reply_text(
+        #     f"⚠️ Insufficient balance!\n"
+        #     f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
+        #     f"Transfer: {amount:,.2f}"
+        # )
+        logger.error(f"Insufficient balance! {from_full_name}: {from_bank_obj['amount']:,.2f}, Transfer: {amount:,.2f}")
         return
     
     # Process transfer
@@ -1234,15 +1256,15 @@ Note: Return the amount as a positive number, ignore any minus signs."""
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ Internal transfer processed!\n\n"
-        f"From: {from_full_name}\n"
-        f"To: {to_full_name}\n"
-        f"Amount: {amount:,.2f}\n\n"
-        f"New balances:\n"
-        f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
-        f"{to_full_name}: {to_bank_obj['amount']:,.2f}"
-    )
+    # await message.reply_text(
+    #     f"✅ Internal transfer processed!\n\n"
+    #     f"From: {from_full_name}\n"
+    #     f"To: {to_full_name}\n"
+    #     f"Amount: {amount:,.2f}\n\n"
+    #     f"New balances:\n"
+    #     f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
+    #     f"{to_full_name}: {to_bank_obj['amount']:,.2f}"
+    # )
 
 # ============================================================================
 # MESSAGE HANDLERS
@@ -1308,7 +1330,8 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
         return
     
     # Get staff prefix
@@ -1316,10 +1339,11 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
         return
     
-    await message.reply_text(f"📸 Processing {len(photos)} photos...")
+    # await message.reply_text(f"📸 Processing {len(photos)} photos...")
     
     # For buy process: Use simple bank type detection (not account verification)
     total_detected_mmk = 0
@@ -1348,22 +1372,24 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
             detected_bank = photo_bank
     
     if not detected_bank:
-        await message.reply_text("❌ Could not detect bank from receipts")
+        # await message.reply_text("❌ Could not detect bank from receipts")
+        logger.error("Could not detect bank from receipts")
         return
     
     logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK from {len(photos)} photos")
     
     # Check if total amount matches
     if abs(total_detected_mmk - tx_info['mmk']) > 100:
-        await message.reply_text(
-            f"⚠️ Amount mismatch!\n"
-            f"Expected: {tx_info['mmk']:,.0f} MMK\n"
-            f"Detected: {total_detected_mmk:,.0f} MMK (from {len(photos)} photos)"
-        )
+        # await message.reply_text(
+        #     f"⚠️ Amount mismatch!\n"
+        #     f"Expected: {tx_info['mmk']:,.0f} MMK\n"
+        #     f"Detected: {total_detected_mmk:,.0f} MMK (from {len(photos)} photos)"
+        # )
+        logger.error(f"Amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {total_detected_mmk:,.0f} MMK (from {len(photos)} photos)")
         return
     
     # Amount matches! Process the transaction
-    await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_mmk:,.0f} MMK\n\nProcessing...")
+    # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_mmk:,.0f} MMK\n\nProcessing...")
     
     # Check if sufficient balance before reducing
     bank_found = False
@@ -1371,18 +1397,20 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         if bank['bank_name'] == detected_bank['bank_name']:
             bank_found = True
             if bank['amount'] < total_detected_mmk:
-                await message.reply_text(
-                    f"❌ Insufficient balance!\n\n"
-                    f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
-                    f"Required: {total_detected_mmk:,.0f} MMK\n"
-                    f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
-                )
+                # await message.reply_text(
+                #     f"❌ Insufficient balance!\n\n"
+                #     f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
+                #     f"Required: {total_detected_mmk:,.0f} MMK\n"
+                #     f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
+                # )
+                logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_detected_mmk:,.0f} MMK, Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK")
                 return
             bank['amount'] -= total_detected_mmk
             break
     
     if not bank_found:
-        await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
+        # await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
+        logger.error(f"Bank not found: {detected_bank['bank_name']}")
         return
     
     # Update USDT to the receiving account (not staff-specific)
@@ -1398,7 +1426,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     if not usdt_updated:
         logger.warning(f"Receiving USDT account not found: {receiving_usdt_account}")
-        await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
+        # await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -1418,18 +1446,19 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ Buy processed!\n\n"
-        f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-        f"USDT: +{tx_info['usdt']:.4f}"
-    )
+    # await message.reply_text(
+    #     f"✅ Buy processed!\n\n"
+    #     f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
+    #     f"USDT: +{tx_info['usdt']:.4f}"
+    # )
 
 async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict, photos: list, message):
     """Process SELL transaction with multiple USDT photos sent as media group"""
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded")
+        # await message.reply_text("❌ Balance not loaded")
+        logger.error("Balance not loaded")
         return
     
     # Get staff prefix
@@ -1437,13 +1466,15 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
         return
     
     # Get user's MMK receipt
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
-        await message.reply_text("❌ Original message has no receipt")
+        # await message.reply_text("❌ Original message has no receipt")
+        logger.error("Original message has no receipt")
         return
     
     # OCR user's receipt
@@ -1455,7 +1486,8 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
     
     if not user_result:
-        await message.reply_text("❌ Could not detect bank/amount from user receipt")
+        # await message.reply_text("❌ Could not detect bank/amount from user receipt")
+        logger.error("Could not detect bank/amount from user receipt")
         return
     
     detected_mmk = user_result['amount']
@@ -1463,15 +1495,16 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     # Verify MMK
     if abs(detected_mmk - tx_info['mmk']) > 100:
-        await message.reply_text(
-            f"⚠️ MMK mismatch!\n"
-            f"Expected: {tx_info['mmk']:,.0f}\n"
-            f"Detected: {detected_mmk:,.0f}"
-        )
+        # await message.reply_text(
+        #     f"⚠️ MMK mismatch!\n"
+        #     f"Expected: {tx_info['mmk']:,.0f}\n"
+        #     f"Detected: {detected_mmk:,.0f}"
+        # )
+        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {detected_mmk:,.0f}")
         return
     
     # Process all USDT photos in bulk
-    await message.reply_text(f"📸 Processing {len(photos)} USDT photos...")
+    # await message.reply_text(f"📸 Processing {len(photos)} USDT photos...")
     
     total_detected_usdt = 0
     detected_bank_type = None
@@ -1503,15 +1536,16 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     # Check if total USDT amount matches (allow 0.03 tolerance)
     if abs(total_detected_usdt - tx_info['usdt']) > 0.03:
-        await message.reply_text(
-            f"⚠️ USDT amount mismatch!\n"
-            f"Expected: {tx_info['usdt']:.4f} USDT\n"
-            f"Detected: {total_detected_usdt:.4f} USDT (from {len(photos)} photos)"
-        )
+        # await message.reply_text(
+        #     f"⚠️ USDT amount mismatch!\n"
+        #     f"Expected: {tx_info['usdt']:.4f} USDT\n"
+        #     f"Detected: {total_detected_usdt:.4f} USDT (from {len(photos)} photos)"
+        # )
+        logger.error(f"USDT amount mismatch! Expected: {tx_info['usdt']:.4f} USDT, Detected: {total_detected_usdt:.4f} USDT (from {len(photos)} photos)")
         return
     
     # Amount matches! Process the transaction
-    await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_usdt:.4f} USDT\n\nProcessing...")
+    # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
     # Update balances for the specific staff member's bank
     for bank in balances['mmk_banks']:
@@ -1541,12 +1575,13 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
             if type_matches:
                 # Check if sufficient USDT balance
                 if bank['amount'] < total_detected_usdt:
-                    await message.reply_text(
-                        f"❌ Insufficient USDT balance!\n\n"
-                        f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
-                        f"Required: {total_detected_usdt:.4f} USDT\n"
-                        f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
-                    )
+                    # await message.reply_text(
+                    #     f"❌ Insufficient USDT balance!\n\n"
+                    #     f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                    #     f"Required: {total_detected_usdt:.4f} USDT\n"
+                    #     f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
+                    # )
+                    logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
                     return
                 bank['amount'] -= total_detected_usdt
                 usdt_updated = True
@@ -1574,11 +1609,11 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ Sell processed!\n\n"
-        f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-        f"USDT: -{total_detected_usdt:.4f}"
-    )
+    # await message.reply_text(
+    #     f"✅ Sell processed!\n\n"
+    #     f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
+    #     f"USDT: -{total_detected_usdt:.4f}"
+    # )
 
 async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict):
     """P2P SELL: Staff sells USDT to another exchange (not to customer)
@@ -1593,11 +1628,13 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
+        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
         return
     
     if not message.photo:
-        await message.reply_text("❌ No MMK receipt photo")
+        # await message.reply_text("❌ No MMK receipt photo")
+        logger.error("No MMK receipt photo")
         return
     
     # Get staff prefix
@@ -1605,7 +1642,8 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
+        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
         return
     
     # Get MMK receipt
@@ -1621,7 +1659,8 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         # Fallback to old method if no accounts registered
         result = await ocr_detect_mmk_bank_and_amount(photo_base64, balances['mmk_banks'], user_prefix)
         if not result:
-            await message.reply_text("❌ Could not detect bank/amount from MMK receipt")
+            # await message.reply_text("❌ Could not detect bank/amount from MMK receipt")
+            logger.error("Could not detect bank/amount from MMK receipt")
             return
         detected_mmk = result['amount']
         detected_bank = result['bank']
@@ -1640,7 +1679,8 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         match_result = await ocr_match_mmk_receipt_to_banks(photo_base64, mmk_banks_with_ids)
         
         if not match_result:
-            await message.reply_text("❌ Could not analyze MMK receipt")
+            # await message.reply_text("❌ Could not analyze MMK receipt")
+            logger.error("Could not analyze MMK receipt")
             return
         
         detected_mmk = match_result['amount']
@@ -1680,7 +1720,8 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
                 break
         
         if not detected_bank:
-            await message.reply_text(f"❌ Matched bank '{matched_bank_name}' not found in balance")
+            # await message.reply_text(f"❌ Matched bank '{matched_bank_name}' not found in balance")
+            logger.error(f"Matched bank '{matched_bank_name}' not found in balance")
             return
         
         logger.info(f"P2P Sell: Matched to {matched_bank_name} with {best_confidence}% confidence")
@@ -1722,7 +1763,8 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
             break
     
     if not usdt_updated:
-        await message.reply_text(f"❌ No USDT bank found for prefix '{user_prefix}'")
+        # await message.reply_text(f"❌ No USDT bank found for prefix '{user_prefix}'")
+        logger.error(f"No USDT bank found for prefix '{user_prefix}'")
         return
     
     # Send new balance
@@ -1743,12 +1785,12 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     
     context.chat_data['balances'] = balances
     
-    await message.reply_text(
-        f"✅ P2P Sell processed!\n\n"
-        f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-        f"USDT: -{total_usdt:.4f} (Amount: {tx_info['usdt']:.4f} + Fee: {tx_info['fee']:.4f})\n"
-        f"Rate: {tx_info['rate']:.5f}"
-    )
+    # await message.reply_text(
+    #     f"✅ P2P Sell processed!\n\n"
+    #     f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
+    #     f"USDT: -{total_usdt:.4f} (Amount: {tx_info['usdt']:.4f} + Fee: {tx_info['fee']:.4f})\n"
+    #     f"Rate: {tx_info['rate']:.5f}"
+    # )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all messages"""

@@ -344,3 +344,167 @@ Reduced 24.9339 USDT from San(Swift) (swift)
 ## Migration
 
 No migration needed. The feature works automatically with existing balance messages. Just ensure staff accounts include "Swift" or "Wallet" in their names.
+
+
+---
+
+## BNB and Other Crypto Support
+
+### Overview
+
+Sometimes staff need to transfer BNB or other cryptocurrencies instead of USDT for network fees or other reasons. The bot automatically handles this by using the USD equivalent values shown in the receipt.
+
+### How It Works
+
+**The bot always uses USD values, never crypto amounts for non-USDT coins.**
+
+When analyzing a receipt:
+1. If it's USDT → use USDT amount directly
+2. If it's BNB/ETH/other → use the USD equivalent shown in the receipt
+3. Network fees are always extracted in USD
+
+### Example: BNB Transfer
+
+**Receipt shows:**
+```
+-0.005 BNB
+4.31 $
+
+Network fee: 0.000072 BNB (0.06 $)
+```
+
+**Bot processes:**
+```
+Amount: 4.31 USD (ignores -0.005 BNB)
+Network fee: 0.06 USD (ignores 0.000072 BNB)
+Total: 4.37 USD (4.31 + 0.06)
+```
+
+**Balance update:**
+```
+San(Swift): 100.0000 → 95.6300 USDT
+(100.0000 - 4.37 = 95.63)
+```
+
+### Supported Coins
+
+The bot can handle any cryptocurrency as long as the receipt shows the USD equivalent:
+- **BNB** (Binance Coin)
+- **ETH** (Ethereum)
+- **USDT** (Tether)
+- **BUSD** (Binance USD)
+- **Any other coin** with USD value shown
+
+### Key Rules
+
+1. **Always use USD values** - Bot looks for "$" symbol in the receipt
+2. **Ignore crypto amounts** - For non-USDT coins, crypto amounts are ignored
+3. **Network fees in USD** - Always extract network fee USD value from parentheses
+4. **USDT is special** - For USDT transfers, use USDT amount directly (no conversion needed)
+
+### Examples
+
+#### Example 1: BNB Transfer (Swift)
+
+**Receipt:**
+```
+BNB Sent
+-0.005 BNB
+4.31 $
+
+Network fee: 0.000072 BNB (0.06 $)
+```
+
+**Bot extracts:**
+- Amount: 4.31 (from "4.31 $")
+- Network fee: 0.06 (from "(0.06 $)")
+- Total: 4.37
+- Bank type: swift
+
+**Transaction message:**
+```
+✅ Sell processed!
+
+MMK: +2,500,000 (San(KBZ))
+USDT: -4.3700
+```
+
+#### Example 2: ETH Transfer (Wallet)
+
+**Receipt:**
+```
+Sent: 0.002 ETH
+Value: 8.50 $
+
+Gas fee: 0.00015 ETH (0.25 $)
+```
+
+**Bot extracts:**
+- Amount: 8.50 (from "8.50 $")
+- Network fee: 0.25 (from "(0.25 $)")
+- Total: 8.75
+- Bank type: wallet
+
+#### Example 3: USDT Transfer (Normal)
+
+**Receipt:**
+```
+USDT Sent
+-24.813896 USDT
+
+Network fee: (0.12 $)
+```
+
+**Bot extracts:**
+- Amount: 24.813896 (from USDT amount)
+- Network fee: 0.12 (from "(0.12 $)")
+- Total: 24.933896
+- Bank type: swift
+
+### Why This Matters
+
+**Problem:** Staff sends 0.005 BNB (worth $4.31) but bot would try to deduct 0.005 USDT (wrong!)
+
+**Solution:** Bot uses the USD equivalent ($4.31) and deducts 4.31 USDT from balance (correct!)
+
+### Technical Details
+
+The OCR prompt specifically instructs:
+```
+IMPORTANT: We work with USD/USDT values, NOT other crypto amounts!
+
+- If receipt shows USDT: use the USDT amount
+- If receipt shows BNB/ETH/other coins: use the USD equivalent shown
+- IGNORE the crypto amount (e.g., ignore "-0.005 BNB", use "4.31 $")
+- Look for "$" symbol to find USD values
+```
+
+### Troubleshooting
+
+**Issue: Bot deducts wrong amount for BNB transfer**
+
+**Cause:** Receipt doesn't show USD equivalent
+
+**Solution:** Ensure the receipt displays the USD value. Most wallets and exchanges show this automatically.
+
+**Issue: Bot uses BNB amount instead of USD**
+
+**Cause:** OCR couldn't find USD value
+
+**Solution:** Check that the receipt clearly shows the USD amount with "$" symbol. If not visible, the transaction may need manual processing.
+
+### Logging
+
+The bot logs the extracted values:
+```
+USDT OCR: {'amount': 4.31, 'network_fee': 0.06, 'total_amount': 4.37, 'bank_type': 'swift'}
+Detected USDT: 4.3700 (amount: 4.3100 + fee: 0.0600) from swift
+Reduced 4.3700 USDT from San(Swift) (swift)
+```
+
+### Important Notes
+
+1. **USD = USDT** - For balance purposes, $1 USD = 1 USDT
+2. **Always check receipts** - Ensure USD values are visible in receipts
+3. **Network fees included** - Total amount includes network fee for Swift/Wallet
+4. **Binance is different** - Binance already includes fee in displayed amount
