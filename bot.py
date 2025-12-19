@@ -32,6 +32,7 @@ TARGET_GROUP_ID = int(os.getenv('TARGET_GROUP_ID', '0'))
 USDT_TRANSFERS_TOPIC_ID = int(os.getenv('USDT_TRANSFERS_TOPIC_ID', '0'))
 AUTO_BALANCE_TOPIC_ID = int(os.getenv('AUTO_BALANCE_TOPIC_ID', '0'))
 ACCOUNTS_MATTER_TOPIC_ID = int(os.getenv('ACCOUNTS_MATTER_TOPIC_ID', '0'))
+ALERT_TOPIC_ID = int(os.getenv('ALERT_TOPIC_ID', '0'))
 
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise ValueError("Missing required environment variables")
@@ -175,6 +176,25 @@ def get_all_mmk_bank_accounts():
     results = cursor.fetchall()
     conn.close()
     return [{'bank_name': r[0], 'account_number': r[1], 'account_holder': r[2]} for r in results]
+
+async def send_alert(message, alert_text, context):
+    """Send alert message (error/warning) to alert topic if configured, otherwise reply to message
+    
+    Args:
+        message: The original message object
+        alert_text: The alert text to send
+        context: The context object for sending messages
+    """
+    if ALERT_TOPIC_ID:
+        # Send to alert topic
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=ALERT_TOPIC_ID,
+            text=alert_text
+        )
+    else:
+        # Send as reply to original message
+        await message.reply_text(alert_text)
 
 # Storage for tracking multiple photo replies to same transaction
 # Format: {original_message_id: {'amounts': [amount1, amount2], 'bank': bank_obj, 'expected': amount, 'type': 'buy/sell'}}
@@ -731,13 +751,11 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
-        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
+        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
         return
     
     if not message.photo:
-        # await message.reply_text("❌ No receipt photo")
-        logger.error("No receipt photo")
+        await send_alert(message, "❌ No receipt photo", context)
         return
     
     # Get staff prefix
@@ -745,8 +763,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
-        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
     original_message_id = message.reply_to_message.message_id
@@ -762,8 +779,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     result = await ocr_detect_mmk_bank_and_amount(photo_base64, balances['mmk_banks'], user_prefix)
     
     if not result:
-        # await message.reply_text("❌ Could not detect bank/amount")
-        logger.error("Could not detect bank/amount")
+        await send_alert(message, "❌ Could not detect bank/amount", context)
         return
     
     detected_mmk = result['amount']
@@ -824,8 +840,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             break
     
     if not bank_found:
-        # await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
-        logger.error(f"Bank not found: {detected_bank['bank_name']}")
+        await send_alert(message, f"❌ Bank not found: {detected_bank['bank_name']}", context)
         if original_message_id in pending_transactions:
             del pending_transactions[original_message_id]
         return
@@ -842,8 +857,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             break
     
     if not usdt_updated:
-        logger.warning(f"Receiving USDT account not found: {receiving_usdt_account}")
-        # await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
+        await send_alert(message, f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.", context)
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -879,8 +893,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded")
-        logger.error("Balance not loaded")
+        await send_alert(message, "❌ Balance not loaded", context)
         return
     
     # Get staff prefix
@@ -888,15 +901,13 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
-        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
     # Get user's MMK receipt
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
-        # await message.reply_text("❌ Original message has no receipt")
-        logger.error("Original message has no receipt")
+        await send_alert(message, "❌ Original message has no receipt", context)
         return
     
     # OCR user's receipt (only once, not accumulated)
@@ -908,8 +919,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
     
     if not user_result:
-        # await message.reply_text("❌ Could not detect bank/amount from user receipt")
-        logger.error("Could not detect bank/amount from user receipt")
+        await send_alert(message, "❌ Could not detect bank/amount from user receipt", context)
         return
     
     detected_mmk = user_result['amount']
@@ -927,8 +937,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     # Get staff's USDT receipt(s) - support multiple photos
     if not message.photo:
-        # await message.reply_text("❌ No USDT receipt")
-        logger.error("No USDT receipt")
+        await send_alert(message, "❌ No USDT receipt", context)
         return
     
     original_message_id = message.reply_to_message.message_id
@@ -942,8 +951,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     usdt_result = await ocr_extract_usdt_with_fee(staff_base64)
     
     if not usdt_result:
-        # await message.reply_text("❌ Could not detect USDT amount")
-        logger.error("Could not detect USDT amount")
+        await send_alert(message, "❌ Could not detect USDT amount", context)
         return
     
     detected_usdt = usdt_result['total_amount']  # Use total (amount + network fee)
@@ -1072,13 +1080,11 @@ async def process_internal_transfer(update: Update, context: ContextTypes.DEFAUL
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded")
-        logger.error("Balance not loaded")
+        await send_alert(message, "❌ Balance not loaded", context)
         return
     
     if not message.photo:
-        # await message.reply_text("❌ No receipt photo")
-        logger.error("No receipt photo")
+        await send_alert(message, "❌ No receipt photo", context)
         return
     
     # Parse transfer text
@@ -1124,8 +1130,7 @@ async def process_internal_transfer(update: Update, context: ContextTypes.DEFAUL
                 usdt_result = await ocr_extract_usdt_with_fee(photo_base64)
                 
                 if not usdt_result:
-                    # await message.reply_text("❌ Could not detect USDT amount")
-                    logger.error("Could not detect USDT amount")
+                    await send_alert(message, "❌ Could not detect USDT amount", context)
                     return
                 
                 # For Swift/Wallet to Binance: use total amount (includes network fee)
@@ -1199,7 +1204,7 @@ Note: Return the amount as a positive number, ignore any minus signs."""
         logger.error(f"Amount detection error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        # await message.reply_text("❌ Could not detect transfer amount")
+        await send_alert(message, "❌ Could not detect transfer amount", context)
         return
     
     # Find and update source bank
@@ -1216,13 +1221,11 @@ Note: Return the amount as a positive number, ignore any minus signs."""
             to_bank_obj = bank
     
     if not from_bank_obj:
-        # await message.reply_text(f"❌ Source bank not found: {from_full_name}")
-        logger.error(f"Source bank not found: {from_full_name}")
+        await send_alert(message, f"❌ Source bank not found: {from_full_name}", context)
         return
     
     if not to_bank_obj:
-        # await message.reply_text(f"❌ Destination bank not found: {to_full_name}")
-        logger.error(f"Destination bank not found: {to_full_name}")
+        await send_alert(message, f"❌ Destination bank not found: {to_full_name}", context)
         return
     
     # Check if sufficient balance
@@ -1330,8 +1333,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
-        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
+        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
         return
     
     # Get staff prefix
@@ -1339,8 +1341,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
-        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
     # await message.reply_text(f"📸 Processing {len(photos)} photos...")
@@ -1372,8 +1373,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
             detected_bank = photo_bank
     
     if not detected_bank:
-        # await message.reply_text("❌ Could not detect bank from receipts")
-        logger.error("Could not detect bank from receipts")
+        await send_alert(message, "❌ Could not detect bank from receipts", context)
         return
     
     logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK from {len(photos)} photos")
@@ -1409,8 +1409,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
             break
     
     if not bank_found:
-        # await message.reply_text(f"❌ Bank not found: {detected_bank['bank_name']}")
-        logger.error(f"Bank not found: {detected_bank['bank_name']}")
+        await send_alert(message, f"❌ Bank not found: {detected_bank['bank_name']}", context)
         return
     
     # Update USDT to the receiving account (not staff-specific)
@@ -1425,8 +1424,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
             break
     
     if not usdt_updated:
-        logger.warning(f"Receiving USDT account not found: {receiving_usdt_account}")
-        # await message.reply_text(f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.")
+        await send_alert(message, f"⚠️ Warning: Receiving USDT account '{receiving_usdt_account}' not found in balance. USDT not added.", context)
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -1457,8 +1455,7 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded")
-        logger.error("Balance not loaded")
+        await send_alert(message, "❌ Balance not loaded", context)
         return
     
     # Get staff prefix
@@ -1466,15 +1463,13 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
-        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
     # Get user's MMK receipt
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
-        # await message.reply_text("❌ Original message has no receipt")
-        logger.error("Original message has no receipt")
+        await send_alert(message, "❌ Original message has no receipt", context)
         return
     
     # OCR user's receipt
@@ -1486,8 +1481,7 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
     
     if not user_result:
-        # await message.reply_text("❌ Could not detect bank/amount from user receipt")
-        logger.error("Could not detect bank/amount from user receipt")
+        await send_alert(message, "❌ Could not detect bank/amount from user receipt", context)
         return
     
     detected_mmk = user_result['amount']
@@ -1628,13 +1622,11 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     balances = context.chat_data.get('balances')
     
     if not balances:
-        # await message.reply_text("❌ Balance not loaded. Post balance message in auto balance topic first.")
-        logger.error("Balance not loaded. Post balance message in auto balance topic first.")
+        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
         return
     
     if not message.photo:
-        # await message.reply_text("❌ No MMK receipt photo")
-        logger.error("No MMK receipt photo")
+        await send_alert(message, "❌ No MMK receipt photo", context)
         return
     
     # Get staff prefix
@@ -1642,8 +1634,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     user_prefix = get_user_prefix(user_id)
     
     if not user_prefix:
-        # await message.reply_text("❌ You don't have a prefix set. Admin needs to use /set_user command.")
-        logger.error(f"User {user_id} doesn't have a prefix set. Admin needs to use /set_user command.")
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
     # Get MMK receipt
@@ -1659,8 +1650,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         # Fallback to old method if no accounts registered
         result = await ocr_detect_mmk_bank_and_amount(photo_base64, balances['mmk_banks'], user_prefix)
         if not result:
-            # await message.reply_text("❌ Could not detect bank/amount from MMK receipt")
-            logger.error("Could not detect bank/amount from MMK receipt")
+            await send_alert(message, "❌ Could not detect bank/amount from MMK receipt", context)
             return
         detected_mmk = result['amount']
         detected_bank = result['bank']
@@ -1679,8 +1669,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         match_result = await ocr_match_mmk_receipt_to_banks(photo_base64, mmk_banks_with_ids)
         
         if not match_result:
-            # await message.reply_text("❌ Could not analyze MMK receipt")
-            logger.error("Could not analyze MMK receipt")
+            await send_alert(message, "❌ Could not analyze MMK receipt", context)
             return
         
         detected_mmk = match_result['amount']
@@ -1720,8 +1709,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
                 break
         
         if not detected_bank:
-            # await message.reply_text(f"❌ Matched bank '{matched_bank_name}' not found in balance")
-            logger.error(f"Matched bank '{matched_bank_name}' not found in balance")
+            await send_alert(message, f"❌ Matched bank '{matched_bank_name}' not found in balance", context)
             return
         
         logger.info(f"P2P Sell: Matched to {matched_bank_name} with {best_confidence}% confidence")
@@ -1763,8 +1751,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
             break
     
     if not usdt_updated:
-        # await message.reply_text(f"❌ No USDT bank found for prefix '{user_prefix}'")
-        logger.error(f"No USDT bank found for prefix '{user_prefix}'")
+        await send_alert(message, f"❌ No USDT bank found for prefix '{user_prefix}'", context)
         return
     
     # Send new balance
