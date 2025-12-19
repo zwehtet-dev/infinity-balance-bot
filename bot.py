@@ -213,6 +213,30 @@ async def send_alert(message, alert_text, context):
         # Send as reply to original message
         await message.reply_text(alert_text)
 
+async def send_command_response(context, response_text, parse_mode=None):
+    """Send command response to alert topic
+    
+    Args:
+        context: The context object for sending messages
+        response_text: The response text to send
+        parse_mode: Optional parse mode (HTML, Markdown, etc.)
+    """
+    if ALERT_TOPIC_ID:
+        # Send to alert topic
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=ALERT_TOPIC_ID,
+            text=response_text,
+            parse_mode=parse_mode
+        )
+    else:
+        # Fallback: send to general chat (shouldn't happen if ALERT_TOPIC_ID is configured)
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=response_text,
+            parse_mode=parse_mode
+        )
+
 # Storage for tracking multiple photo replies to same transaction
 # Format: {original_message_id: {'amounts': [amount1, amount2], 'bank': bank_obj, 'expected': amount, 'type': 'buy/sell'}}
 pending_transactions = {}
@@ -1951,7 +1975,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
-    await update.message.reply_text(
+    await send_command_response(
+        context,
         "✅ <b>Infinity Balance Bot</b>\n\n"
         "🔧 Independent Mode (No Backend)\n"
         "📊 Balances stored in Telegram\n"
@@ -1981,16 +2006,16 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await update.message.reply_text("❌ No balance loaded")
+        await send_command_response(context, "❌ No balance loaded")
         return
     
     msg = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
-    await update.message.reply_text(f"📊 <b>Balance:</b>\n\n<pre>{msg}</pre>", parse_mode='HTML')
+    await send_command_response(context, f"📊 <b>Balance:</b>\n\n<pre>{msg}</pre>", parse_mode='HTML')
 
 async def load_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Load balance from replied message"""
     if not update.message.reply_to_message or not update.message.reply_to_message.text:
-        await update.message.reply_text("Reply to a balance message with /load")
+        await send_command_response(context, "Reply to a balance message with /load")
         return
     
     balances = parse_balance_message(update.message.reply_to_message.text)
@@ -1999,14 +2024,15 @@ async def load_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.chat_data['balances'] = balances
         thb_count = len(balances.get('thb_banks', []))
         thb_info = f"\nTHB Banks: {thb_count}" if thb_count > 0 else ""
-        await update.message.reply_text(
+        await send_command_response(
+            context,
             f"✅ Loaded!\n\n"
             f"MMK Banks: {len(balances['mmk_banks'])}\n"
             f"USDT Banks: {len(balances['usdt_banks'])}"
             f"{thb_info}"
         )
     else:
-        await update.message.reply_text("❌ Could not parse balance")
+        await send_command_response(context, "❌ Could not parse balance")
 
 async def set_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set user prefix mapping: /set_user @username prefix_name"""
@@ -2016,7 +2042,7 @@ async def set_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # For now, anyone can set mappings
     
     if len(context.args) < 2:
-        await message.reply_text(
+        await send_command_response(context, 
             "Usage: /set_user @username prefix_name\n\n"
             "Examples:\n"
             "/set_user @john San\n"
@@ -2035,7 +2061,7 @@ async def set_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if entity.type == "mention":
                 # @username format - we need to get user_id from the mentioned user
                 # This requires the user to have interacted with the bot before
-                await message.reply_text(
+                await send_command_response(context, 
                     "⚠️ Please reply to a message from the user instead, or provide their user ID.\n"
                     "Usage: /set_user <user_id> <prefix_name>"
                 )
@@ -2045,7 +2071,7 @@ async def set_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id = entity.user.id
                 username = entity.user.username or entity.user.first_name
                 set_user_prefix(user_id, prefix_name, username)
-                await message.reply_text(
+                await send_command_response(context, 
                     f"✅ Set prefix '{prefix_name}' for user {username} (ID: {user_id})"
                 )
                 return
@@ -2054,11 +2080,11 @@ async def set_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(username_arg)
         set_user_prefix(user_id, prefix_name)
-        await message.reply_text(
+        await send_command_response(context, 
             f"✅ Set prefix '{prefix_name}' for user ID: {user_id}"
         )
     except ValueError:
-        await message.reply_text(
+        await send_command_response(context, 
             "❌ Invalid format. Please use:\n"
             "/set_user <user_id> <prefix_name>\n\n"
             "Or reply to a user's message with:\n"
@@ -2070,11 +2096,11 @@ async def set_user_reply_command(update: Update, context: ContextTypes.DEFAULT_T
     message = update.message
     
     if not message.reply_to_message:
-        await message.reply_text("Please reply to a user's message")
+        await send_command_response(context, "Please reply to a user's message")
         return
     
     if len(context.args) < 1:
-        await message.reply_text("Usage: Reply to user's message with /set_user <prefix_name>")
+        await send_command_response(context, "Usage: Reply to user's message with /set_user <prefix_name>")
         return
     
     prefix_name = context.args[0]
@@ -2082,7 +2108,7 @@ async def set_user_reply_command(update: Update, context: ContextTypes.DEFAULT_T
     username = message.reply_to_message.from_user.username or message.reply_to_message.from_user.first_name
     
     set_user_prefix(user_id, prefix_name, username)
-    await message.reply_text(
+    await send_command_response(context, 
         f"✅ Set prefix '{prefix_name}' for @{username} (ID: {user_id})"
     )
 
@@ -2093,7 +2119,7 @@ async def set_receiving_usdt_acc_command(update: Update, context: ContextTypes.D
     if len(context.args) < 1:
         # Show current setting
         current_account = get_receiving_usdt_account()
-        await message.reply_text(
+        await send_command_response(context, 
             f"📊 <b>Current Receiving USDT Account:</b>\n"
             f"<code>{current_account}</code>\n\n"
             f"<b>Usage:</b>\n"
@@ -2108,7 +2134,7 @@ async def set_receiving_usdt_acc_command(update: Update, context: ContextTypes.D
     account_name = ' '.join(context.args)
     set_receiving_usdt_account(account_name)
     
-    await message.reply_text(
+    await send_command_response(context, 
         f"✅ <b>Receiving USDT Account Updated!</b>\n\n"
         f"New account: <code>{account_name}</code>\n\n"
         f"All buy transactions will now add USDT to this account.",
@@ -2131,7 +2157,7 @@ async def set_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"  Holder: {acc['account_holder']}"
                 for acc in accounts
             ])
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>Registered MMK Bank Accounts:</b>\n\n"
                 f"{account_list}\n\n"
                 f"<b>Usage:</b>\n"
@@ -2144,7 +2170,7 @@ async def set_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode='HTML'
             )
         else:
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>No MMK Bank Accounts Registered</b>\n\n"
                 f"<b>Usage:</b>\n"
                 f"/set_mmk_bank &lt;bank_name&gt; | &lt;account_number&gt; | &lt;holder_name&gt;\n\n"
@@ -2162,7 +2188,7 @@ async def set_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TYP
     parts = [p.strip() for p in full_text.split('|')]
     
     if len(parts) != 3:
-        await message.reply_text(
+        await send_command_response(context, 
             f"❌ <b>Invalid Format!</b>\n\n"
             f"<b>Usage:</b>\n"
             f"/set_mmk_bank &lt;bank_name&gt; | &lt;account_number&gt; | &lt;holder_name&gt;\n\n"
@@ -2218,7 +2244,7 @@ async def edit_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TY
                 f"  Holder: {acc['account_holder']}"
                 for acc in accounts
             ])
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>Edit MMK Bank Account:</b>\n\n"
                 f"<b>Current Accounts:</b>\n{account_list}\n\n"
                 f"<b>Usage:</b>\n"
@@ -2228,7 +2254,7 @@ async def edit_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode='HTML'
             )
         else:
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>No MMK Bank Accounts to Edit</b>\n\n"
                 f"Use /set_mmk_bank to add accounts first.",
                 parse_mode='HTML'
@@ -2240,7 +2266,7 @@ async def edit_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TY
     parts = [p.strip() for p in full_text.split('|')]
     
     if len(parts) != 3:
-        await message.reply_text(
+        await send_command_response(context, 
             f"❌ <b>Invalid Format!</b>\n\n"
             f"<b>Usage:</b>\n"
             f"/edit_mmk_bank &lt;bank_name&gt; | &lt;new_account&gt; | &lt;new_holder&gt;\n\n"
@@ -2294,7 +2320,7 @@ async def remove_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_
                 f"• <code>{acc['bank_name']}</code>"
                 for acc in accounts
             ])
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>Remove MMK Bank Account:</b>\n\n"
                 f"<b>Current Accounts:</b>\n{account_list}\n\n"
                 f"<b>Usage:</b>\n"
@@ -2304,7 +2330,7 @@ async def remove_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode='HTML'
             )
         else:
-            await message.reply_text(
+            await send_command_response(context, 
                 f"🏦 <b>No MMK Bank Accounts to Remove</b>",
                 parse_mode='HTML'
             )
@@ -2315,7 +2341,7 @@ async def remove_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_
     # Check if bank exists
     existing = get_mmk_bank_account(bank_name)
     if not existing:
-        await message.reply_text(
+        await send_command_response(context, 
             f"❌ <b>Bank Not Found!</b>\n\n"
             f"<code>{bank_name}</code> is not registered.",
             parse_mode='HTML'
@@ -2404,7 +2430,7 @@ async def list_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TY
     accounts = get_all_mmk_bank_accounts()
     
     if not accounts:
-        await update.message.reply_text(
+        await send_command_response(context, 
             "📋 <b>Registered MMK Bank Accounts</b>\n\n"
             "No banks registered yet.\n\n"
             "Use /set_mmk_bank to register a bank account.",
@@ -2434,7 +2460,7 @@ async def list_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_TY
     message += "• /edit_mmk_bank - Edit existing bank\n"
     message += "• /remove_mmk_bank - Remove bank"
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    await send_command_response(context, message, parse_mode='HTML')
 
 async def show_receiving_usdt_acc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the current receiving USDT account for buy transactions"""
@@ -2456,7 +2482,7 @@ async def show_receiving_usdt_acc_command(update: Update, context: ContextTypes.
         "Example: <code>/set_receiving_usdt_acc ACT(Wallet)</code>"
     )
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    await send_command_response(context, message, parse_mode='HTML')
     logger.info(f"Test command - Chat: {chat_id}, Thread: {thread_id}")
 
 # ============================================================================
