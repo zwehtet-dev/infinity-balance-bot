@@ -60,17 +60,13 @@ def main():
     
     init_database()
     
-    # Example mappings - replace with your actual user IDs
-    # To get user IDs, have users send a message in the group and check bot logs
+    # Default user mappings
+    print("\n📝 Adding default users...")
+    add_user(5087953529, "OKM", "ohkkamyo")
+    add_user(7852335435, "MMN", "Min Myat")
+    add_user(1703851340, "San", "itsnonchalantsan")
     
-    # Uncomment and modify these lines with actual user IDs:
-    # add_user(123456789, "San", "san_username")
-    # add_user(987654321, "TZT", "tzt_username")
-    # add_user(111222333, "MMN", "mmn_username")
-    # add_user(444555666, "NDT", "nandar_username")
-    
-    print("\n⚠️  To add users, edit this script and uncomment the add_user() lines")
-    print("💡 Or use the /set_user command in Telegram (reply to user's message)")
+    print("\n💡 To add more users, use the /set_user command in Telegram (reply to user's message)")
     
     list_users()
 

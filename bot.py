@@ -103,6 +103,23 @@ def init_database():
     conn.close()
     logger.info("✅ Database initialized with default banks")
 
+def normalize_bank_name(bank_name):
+    """Normalize bank name for case-insensitive comparison (removes spaces, converts to lowercase)
+    
+    Examples:
+        'MMN(Swift)' -> 'mmn(swift)'
+        'mmn ( swift )' -> 'mmn(swift)'
+        'MMN ( BINANCE)' -> 'mmn(binance)'
+    """
+    if not bank_name:
+        return ""
+    # Remove all spaces and convert to lowercase
+    return bank_name.replace(" ", "").lower()
+
+def banks_match(bank_name1, bank_name2):
+    """Check if two bank names match (case-insensitive, space-insensitive)"""
+    return normalize_bank_name(bank_name1) == normalize_bank_name(bank_name2)
+
 def get_user_prefix(user_id):
     """Get prefix name for a user"""
     conn = sqlite3.connect(DB_FILE)
@@ -822,7 +839,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     # Check if sufficient balance before reducing
     bank_found = False
     for bank in balances['mmk_banks']:
-        if bank['bank_name'] == detected_bank['bank_name']:
+        if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank_found = True
             if bank['amount'] < total_detected_mmk:
                 # await message.reply_text(
@@ -850,7 +867,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     usdt_updated = False
     
     for bank in balances['usdt_banks']:
-        if bank['bank_name'] == receiving_usdt_account:
+        if banks_match(bank['bank_name'], receiving_usdt_account):
             bank['amount'] += tx_info['usdt']
             usdt_updated = True
             logger.info(f"Added {tx_info['usdt']:.4f} USDT to receiving account: {receiving_usdt_account}")
@@ -994,7 +1011,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     # Update balances for the specific staff member's bank
     for bank in balances['mmk_banks']:
-        if bank['bank_name'] == detected_bank['bank_name']:
+        if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank['amount'] += detected_mmk
             break
     
@@ -1215,9 +1232,9 @@ Note: Return the amount as a positive number, ignore any minus signs."""
     all_banks = balances['mmk_banks'] + balances['usdt_banks'] + balances.get('thb_banks', [])
     
     for bank in all_banks:
-        if bank['bank_name'] == from_full_name:
+        if banks_match(bank['bank_name'], from_full_name):
             from_bank_obj = bank
-        if bank['bank_name'] == to_full_name:
+        if banks_match(bank['bank_name'], to_full_name):
             to_bank_obj = bank
     
     if not from_bank_obj:
@@ -1394,7 +1411,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     # Check if sufficient balance before reducing
     bank_found = False
     for bank in balances['mmk_banks']:
-        if bank['bank_name'] == detected_bank['bank_name']:
+        if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank_found = True
             if bank['amount'] < total_detected_mmk:
                 # await message.reply_text(
@@ -1417,7 +1434,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     usdt_updated = False
     
     for bank in balances['usdt_banks']:
-        if bank['bank_name'] == receiving_usdt_account:
+        if banks_match(bank['bank_name'], receiving_usdt_account):
             bank['amount'] += tx_info['usdt']
             usdt_updated = True
             logger.info(f"Added {tx_info['usdt']:.4f} USDT to receiving account: {receiving_usdt_account}")
@@ -1543,7 +1560,7 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     # Update balances for the specific staff member's bank
     for bank in balances['mmk_banks']:
-        if bank['bank_name'] == detected_bank['bank_name']:
+        if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank['amount'] += detected_mmk
             break
     
@@ -1704,7 +1721,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         # Find the bank in balances
         detected_bank = None
         for bank in balances['mmk_banks']:
-            if bank['bank_name'] == matched_bank_name:
+            if banks_match(bank['bank_name'], matched_bank_name):
                 detected_bank = bank
                 break
         
@@ -1725,7 +1742,7 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
     
     # Add MMK to detected bank
     for bank in balances['mmk_banks']:
-        if bank['bank_name'] == detected_bank['bank_name']:
+        if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank['amount'] += detected_mmk
             logger.info(f"Added {detected_mmk:,.0f} MMK to {bank['bank_name']}")
             break
@@ -2446,12 +2463,32 @@ async def show_receiving_usdt_acc_command(update: Update, context: ContextTypes.
 # MAIN
 # ============================================================================
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors gracefully"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Log the error but don't crash - network errors are transient
+    import traceback
+    logger.error("".join(traceback.format_exception(None, context.error, context.error.__traceback__)))
+
 def main():
     """Start bot"""
     # Initialize database
     init_database()
     
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Build application with connection pool settings and timeouts
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .build()
+    )
+    
+    # Add error handler
+    app.add_error_handler(error_handler)
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("balance", balance_command))
@@ -2472,7 +2509,13 @@ def main():
     logger.info(f"📊 Balance Topic: {AUTO_BALANCE_TOPIC_ID}")
     logger.info(f"🏦 Accounts Matter Topic: {ACCOUNTS_MATTER_TOPIC_ID}")
     
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Run with error handling for network issues
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        # Automatically retry on network errors
+        close_loop=False
+    )
 
 if __name__ == '__main__':
     main()
