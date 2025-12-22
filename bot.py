@@ -826,7 +826,21 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     detected_mmk = result['amount']
     detected_bank = result['bank']
     
-    logger.info(f"Buy: Detected {detected_mmk:,.0f} MMK from {detected_bank['bank_name']}")
+    # Check if staff reply contains fee (format: fee-3039)
+    staff_reply_text = message.text or message.caption or ""
+    mmk_fee = 0
+    fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_reply_text, re.IGNORECASE)
+    if fee_match:
+        mmk_fee = float(fee_match.group(1).replace(',', ''))
+        logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
+    
+    # Add fee to detected MMK amount
+    total_mmk = detected_mmk + mmk_fee
+    
+    if mmk_fee > 0:
+        logger.info(f"Buy: Detected {detected_mmk:,.0f} MMK + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f} MMK from {detected_bank['bank_name']}")
+    else:
+        logger.info(f"Buy: Detected {detected_mmk:,.0f} MMK from {detected_bank['bank_name']}")
     
     # Initialize or update pending transaction
     if original_message_id not in pending_transactions:
@@ -836,15 +850,16 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             'expected_mmk': tx_info['mmk'],
             'expected_usdt': tx_info['usdt'],
             'type': 'buy',
-            'user_prefix': user_prefix
+            'user_prefix': user_prefix,
+            'mmk_fee': mmk_fee  # Store MMK fee
         }
     
-    # Add this amount to the list
-    pending_transactions[original_message_id]['amounts'].append(detected_mmk)
+    # Add this amount to the list (use total_mmk including fee)
+    pending_transactions[original_message_id]['amounts'].append(total_mmk)
     total_detected_mmk = sum(pending_transactions[original_message_id]['amounts'])
     photo_count = len(pending_transactions[original_message_id]['amounts'])
     
-    logger.info(f"Buy transaction {original_message_id}: Added {detected_mmk:,.0f}, Total: {total_detected_mmk:,.0f} from {photo_count} photo(s)")
+    logger.info(f"Buy transaction {original_message_id}: Added {total_mmk:,.0f}, Total: {total_detected_mmk:,.0f} from {photo_count} photo(s)")
     
     # Check if total amount matches (allow 100 MMK difference)
     if abs(total_detected_mmk - tx_info['mmk']) > 100:
@@ -878,6 +893,10 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
                     del pending_transactions[original_message_id]
                 return
             bank['amount'] -= total_detected_mmk
+            if mmk_fee > 0:
+                logger.info(f"Reduced {total_detected_mmk:,.0f} MMK from {bank['bank_name']} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
+            else:
+                logger.info(f"Reduced {total_detected_mmk:,.0f} MMK from {bank['bank_name']}")
             break
     
     if not bank_found:
@@ -966,14 +985,28 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     detected_mmk = user_result['amount']
     detected_bank = user_result['bank']
     
-    # Verify MMK
-    if abs(detected_mmk - tx_info['mmk']) > 100:
+    # Check if staff reply contains fee (format: fee-3039)
+    staff_reply_text = message.text or message.caption or ""
+    mmk_fee = 0
+    fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_reply_text, re.IGNORECASE)
+    if fee_match:
+        mmk_fee = float(fee_match.group(1).replace(',', ''))
+        logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
+    
+    # Add fee to detected MMK amount
+    total_mmk = detected_mmk + mmk_fee
+    
+    if mmk_fee > 0:
+        logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
+    
+    # Verify MMK (use total_mmk for comparison)
+    if abs(total_mmk - tx_info['mmk']) > 100:
         # await message.reply_text(
         #     f"⚠️ MMK mismatch!\n"
         #     f"Expected: {tx_info['mmk']:,.0f}\n"
-        #     f"Detected: {detected_mmk:,.0f}"
+        #     f"Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
         # )
-        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {detected_mmk:,.0f}")
+        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
         return
     
     # Get staff's USDT receipt(s) - support multiple photos
@@ -1005,11 +1038,12 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
         pending_transactions[original_message_id] = {
             'amounts': [],
             'mmk_bank': detected_bank,
-            'detected_mmk': detected_mmk,
+            'detected_mmk': total_mmk,  # Store total MMK (including fee)
             'expected_usdt': tx_info['usdt'],
             'type': 'sell',
             'user_prefix': user_prefix,
-            'bank_type': bank_type  # Store bank type (swift/wallet)
+            'bank_type': bank_type,  # Store bank type (swift/wallet)
+            'mmk_fee': mmk_fee  # Store MMK fee
         }
     
     # Add this USDT amount to the list
@@ -1033,10 +1067,14 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     # Amount matches! Process the transaction
     # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
-    # Update balances for the specific staff member's bank
+    # Update balances for the specific staff member's bank (use total_mmk including fee)
     for bank in balances['mmk_banks']:
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
-            bank['amount'] += detected_mmk
+            bank['amount'] += total_mmk
+            if mmk_fee > 0:
+                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
+            else:
+                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']}")
             break
     
     # Update USDT for the specific staff member's Swift or Wallet account
@@ -1113,6 +1151,102 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
 # INTERNAL TRANSFER PROCESSING
 # ============================================================================
 
+async def process_coin_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process coin transfer with network fee (USDT transfers between accounts)
+    Format: San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+    
+    Process:
+    1. Detect source and destination accounts
+    2. Extract sent amount, fee, and received amount
+    3. Reduce sent amount from source account
+    4. Add received amount to destination account
+    """
+    message = update.message
+    balances = context.chat_data.get('balances')
+    
+    if not balances:
+        await send_alert(message, "❌ Balance not loaded", context)
+        return
+    
+    # Parse transfer text
+    text = message.text or message.caption or ""
+    
+    # Pattern: Prefix(Bank) to Prefix(Bank) AMOUNT USDT-FEE USDT(fee) = RECEIVED USDT
+    # Example: San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+    coin_transfer_pattern = r'([A-Za-z\s]+)\s*\(([^)]+)\)\s+to\s+([A-Za-z\s]+)\s*\(([^)]+)\)\s+([\d.]+)\s*USDT\s*-\s*([\d.]+)\s*USDT\s*\(fee\)\s*=\s*([\d.]+)\s*USDT'
+    match = re.search(coin_transfer_pattern, text, re.IGNORECASE)
+    
+    if match:
+        from_prefix = match.group(1).strip()
+        from_bank = match.group(2).strip()
+        to_prefix = match.group(3).strip()
+        to_bank = match.group(4).strip()
+        sent_amount = float(match.group(5))
+        fee_amount = float(match.group(6))
+        received_amount = float(match.group(7))
+        
+        from_full_name = f"{from_prefix}({from_bank})"
+        to_full_name = f"{to_prefix}({to_bank})"
+        
+        logger.info(f"Coin transfer detected: {from_full_name} -> {to_full_name}, Sent: {sent_amount} USDT, Fee: {fee_amount} USDT, Received: {received_amount} USDT")
+        
+        # Find source and destination banks in USDT banks
+        from_bank_obj = None
+        to_bank_obj = None
+        
+        for bank in balances['usdt_banks']:
+            if banks_match(bank['bank_name'], from_full_name):
+                from_bank_obj = bank
+            if banks_match(bank['bank_name'], to_full_name):
+                to_bank_obj = bank
+        
+        if not from_bank_obj:
+            await send_alert(message, f"❌ Source USDT account not found: {from_full_name}", context)
+            return
+        
+        if not to_bank_obj:
+            await send_alert(message, f"❌ Destination USDT account not found: {to_full_name}", context)
+            return
+        
+        # Check if sufficient balance in source account
+        if from_bank_obj['amount'] < sent_amount:
+            logger.error(f"Insufficient USDT balance! {from_full_name}: {from_bank_obj['amount']:.4f} USDT, Required: {sent_amount:.4f} USDT")
+            await send_alert(message, 
+                f"❌ Insufficient USDT balance!\n"
+                f"{from_full_name}: {from_bank_obj['amount']:.4f} USDT\n"
+                f"Required: {sent_amount:.4f} USDT\n"
+                f"Shortage: {sent_amount - from_bank_obj['amount']:.4f} USDT", 
+                context)
+            return
+        
+        # Process coin transfer
+        from_bank_obj['amount'] -= sent_amount
+        to_bank_obj['amount'] += received_amount
+        
+        logger.info(f"Coin transfer processed: -{sent_amount:.4f} from {from_full_name}, +{received_amount:.4f} to {to_full_name}")
+        
+        # Send new balance to auto balance topic
+        new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
+        
+        if AUTO_BALANCE_TOPIC_ID:
+            await context.bot.send_message(
+                chat_id=TARGET_GROUP_ID,
+                message_thread_id=AUTO_BALANCE_TOPIC_ID,
+                text=new_balance
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=TARGET_GROUP_ID,
+                text=new_balance
+            )
+        
+        context.chat_data['balances'] = balances
+        
+        logger.info(f"✅ Coin transfer complete: {from_full_name} ({from_bank_obj['amount']:.4f}) -> {to_full_name} ({to_bank_obj['amount']:.4f})")
+        return True
+    
+    return False
+
 async def process_internal_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process internal bank transfers in Accounts Matter topic
     Format: San(Wave Channel) to NDT (Wave)
@@ -1130,6 +1264,11 @@ async def process_internal_transfer(update: Update, context: ContextTypes.DEFAUL
     
     # Parse transfer text
     text = message.text or message.caption or ""
+    
+    # First check if this is a coin transfer with network fee
+    coin_transfer_processed = await process_coin_transfer(update, context)
+    if coin_transfer_processed:
+        return
     
     # Pattern: Prefix(Bank) to Prefix(Bank)
     transfer_pattern = r'([A-Za-z\s]+)\(([^)]+)\)\s+to\s+([A-Za-z\s]+)\(([^)]+)\)'
@@ -1387,6 +1526,14 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     # await message.reply_text(f"📸 Processing {len(photos)} photos...")
     
+    # Check if staff reply contains fee (format: fee-3039)
+    staff_reply_text = message.text or message.caption or ""
+    mmk_fee = 0
+    fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_reply_text, re.IGNORECASE)
+    if fee_match:
+        mmk_fee = float(fee_match.group(1).replace(',', ''))
+        logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
+    
     # For buy process: Use simple bank type detection (not account verification)
     total_detected_mmk = 0
     detected_bank = None
@@ -1417,36 +1564,46 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         await send_alert(message, "❌ Could not detect bank from receipts", context)
         return
     
-    logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK from {len(photos)} photos")
+    # Add fee to total MMK
+    total_mmk = total_detected_mmk + mmk_fee
     
-    # Check if total amount matches
-    if abs(total_detected_mmk - tx_info['mmk']) > 100:
+    if mmk_fee > 0:
+        logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f} MMK from {len(photos)} photos")
+    else:
+        logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK from {len(photos)} photos")
+    
+    # Check if total amount matches (use total_mmk for comparison)
+    if abs(total_mmk - tx_info['mmk']) > 100:
         # await message.reply_text(
         #     f"⚠️ Amount mismatch!\n"
         #     f"Expected: {tx_info['mmk']:,.0f} MMK\n"
-        #     f"Detected: {total_detected_mmk:,.0f} MMK (from {len(photos)} photos)"
+        #     f"Detected: {total_mmk:,.0f} MMK (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
         # )
-        logger.error(f"Amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {total_detected_mmk:,.0f} MMK (from {len(photos)} photos)")
+        logger.error(f"Amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {total_mmk:,.0f} MMK (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
         return
     
     # Amount matches! Process the transaction
-    # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_mmk:,.0f} MMK\n\nProcessing...")
+    # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_mmk:,.0f} MMK\n\nProcessing...")
     
-    # Check if sufficient balance before reducing
+    # Check if sufficient balance before reducing (use total_mmk)
     bank_found = False
     for bank in balances['mmk_banks']:
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank_found = True
-            if bank['amount'] < total_detected_mmk:
+            if bank['amount'] < total_mmk:
                 # await message.reply_text(
                 #     f"❌ Insufficient balance!\n\n"
                 #     f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
-                #     f"Required: {total_detected_mmk:,.0f} MMK\n"
-                #     f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
+                #     f"Required: {total_mmk:,.0f} MMK\n"
+                #     f"Shortage: {total_mmk - bank['amount']:,.0f} MMK"
                 # )
-                logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_detected_mmk:,.0f} MMK, Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK")
+                logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_mmk:,.0f} MMK, Shortage: {total_mmk - bank['amount']:,.0f} MMK")
                 return
-            bank['amount'] -= total_detected_mmk
+            bank['amount'] -= total_mmk
+            if mmk_fee > 0:
+                logger.info(f"Reduced {total_mmk:,.0f} MMK from {bank['bank_name']} (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
+            else:
+                logger.info(f"Reduced {total_mmk:,.0f} MMK from {bank['bank_name']}")
             break
     
     if not bank_found:
@@ -1528,14 +1685,28 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     detected_mmk = user_result['amount']
     detected_bank = user_result['bank']
     
-    # Verify MMK
-    if abs(detected_mmk - tx_info['mmk']) > 100:
+    # Check if staff reply contains fee (format: fee-3039)
+    staff_reply_text = message.text or message.caption or ""
+    mmk_fee = 0
+    fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_reply_text, re.IGNORECASE)
+    if fee_match:
+        mmk_fee = float(fee_match.group(1).replace(',', ''))
+        logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
+    
+    # Add fee to detected MMK amount
+    total_mmk = detected_mmk + mmk_fee
+    
+    if mmk_fee > 0:
+        logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
+    
+    # Verify MMK (use total_mmk for comparison)
+    if abs(total_mmk - tx_info['mmk']) > 100:
         # await message.reply_text(
         #     f"⚠️ MMK mismatch!\n"
         #     f"Expected: {tx_info['mmk']:,.0f}\n"
-        #     f"Detected: {detected_mmk:,.0f}"
+        #     f"Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
         # )
-        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {detected_mmk:,.0f}")
+        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
         return
     
     # Process all USDT photos in bulk
@@ -1582,10 +1753,14 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     # Amount matches! Process the transaction
     # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
-    # Update balances for the specific staff member's bank
+    # Update balances for the specific staff member's bank (use total_mmk including fee)
     for bank in balances['mmk_banks']:
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
-            bank['amount'] += detected_mmk
+            bank['amount'] += total_mmk
+            if mmk_fee > 0:
+                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
+            else:
+                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']}")
             break
     
     # Update USDT for the specific staff member's Swift, Wallet, or Binance account

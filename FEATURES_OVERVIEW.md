@@ -99,12 +99,14 @@ ACT(Bkk B) -13,223
 2. Staff replies with MMK receipt photo
 3. Bot processes:
    - Detects MMK bank and amount from staff's receipt
-   - Reduces MMK from staff's bank
+   - Detects optional MMK fee in staff's reply (e.g., "fee-3000")
+   - Reduces MMK + fee from staff's bank
    - Adds USDT to receiving account (configurable)
    - Posts updated balance
 
 **Features:**
 - Supports multiple MMK receipts (accumulated)
+- **NEW: MMK fee handling** - Staff can add fees to MMK amount
 - Confidence-based bank matching (50% minimum)
 - Account verification (account number + holder name)
 - Insufficient balance checks
@@ -122,6 +124,21 @@ MMK: -2,500,000 (San(KBZ))
 USDT: +100.0000
 ```
 
+**Example with MMK Fee:**
+```
+Customer: Buy 100 USDT = 2,503,000 MMK
+[Customer's USDT receipt]
+
+Staff (San): [Replies with KBZ receipt showing 2,500,000 MMK]
+fee-3000
+
+Bot: ✅ Buy processed!
+MMK: -2,503,000 (Receipt: 2,500,000 + Fee: 3,000)
+USDT: +100.0000
+```
+
+**See:** [MMK_FEE_HANDLING.md](MMK_FEE_HANDLING.md) for detailed fee guide
+
 ### 2. Sell Transaction (Customer Sells USDT)
 
 **Flow:**
@@ -129,13 +146,15 @@ USDT: +100.0000
 2. Staff replies with USDT receipt photo (Binance/Swift/Wallet)
 3. Bot processes:
    - Detects MMK bank and amount from customer's receipt
-   - Adds MMK to staff's bank
+   - Detects optional MMK fee in staff's reply (e.g., "fee-3039")
+   - Adds MMK + fee to staff's bank
    - Detects USDT amount + network fee from staff's receipt
    - Reduces USDT from staff's Binance/Swift/Wallet account
    - Posts updated balance
 
 **Features:**
 - Supports multiple USDT receipts (accumulated)
+- **NEW: MMK fee handling** - Staff can add fees to MMK amount
 - Smart network fee handling:
   - **Binance**: Fee already included in amount
   - **Swift/Wallet**: Adds fee to amount
@@ -154,6 +173,21 @@ Bot: ✅ Sell processed!
 MMK: +2,500,000 (San(KBZ))
 USDT: -99.99 (San(Binance))
 ```
+
+**Example with MMK Fee:**
+```
+Customer: Sell 600 USDT = 15,200,285 MMK
+[Customer's MMK receipt showing 15,197,246 MMK]
+
+Staff (San): [Replies with USDT receipt]
+fee-3039
+
+Bot: ✅ Sell processed!
+MMK: +15,200,285 (Receipt: 15,197,246 + Fee: 3,039)
+USDT: -600 (San(Binance))
+```
+
+**See:** [MMK_FEE_HANDLING.md](MMK_FEE_HANDLING.md) for detailed fee guide
 
 ### 3. P2P Sell Transaction (Staff Sells USDT to Exchange)
 
@@ -217,6 +251,51 @@ New balances:
 San(Wave Channel): 970,347
 NDT(Wave): 3,864,900
 ```
+
+### 5. Coin Transfer with Network Fee
+
+**Location:** Accounts Matter Topic
+
+**Purpose:** Transfer USDT between accounts with blockchain network fees (TRC20, BEP20, etc.)
+
+**Format:**
+```
+[Receipt Photo]
+Prefix(Bank) to Prefix(Bank) AMOUNT USDT-FEE USDT(fee) = RECEIVED USDT
+```
+
+**Example:**
+```
+[TRC20 Receipt Photo]
+San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+```
+
+**Process:**
+1. Staff sends receipt with transfer details
+2. Bot parses: source, destination, sent amount, fee, received amount
+3. Bot reduces sent amount (10 USDT) from source account (San(binance))
+4. Bot adds received amount (9.53 USDT) to destination account (OKM(Wallet))
+5. Network fee (0.47 USDT) is automatically calculated
+6. Updated balance posted to Auto Balance topic
+
+**Features:**
+- No OCR needed (amounts in text)
+- Automatic fee calculation
+- Supports any USDT account combination
+- Validates sufficient balance
+- Works only in Accounts Matter topic
+
+**Use Cases:**
+- Binance to Wallet transfers via TRC20
+- Wallet to Binance transfers via BEP20
+- Swift to Wallet transfers with network fees
+- Any blockchain USDT transfer with fees
+
+**Difference from Regular Internal Transfer:**
+- Coin Transfer: Includes fee calculation, two amounts (sent & received)
+- Regular Transfer: OCR detects amount, one amount, no fee
+
+**See:** [COIN_TRANSFER.md](COIN_TRANSFER.md) for detailed guide
 
 ---
 

@@ -1,5 +1,91 @@
 # Changelog
 
+## Version 2.2.0 - MMK Fee Handling in Buy and Sell Transactions
+
+### 🎉 New Features
+
+#### MMK Fee Support in Staff Replies
+- **New feature**: Staff can now include MMK fees in their buy and sell transaction replies
+- Format: `[Receipt photo] fee-3039`
+- Bot automatically adds the fee to the detected MMK amount from receipt
+- Example: Receipt shows 15,197,246 MMK + fee-3039 = 15,200,285 MMK total
+- Works with both single photo and bulk photo (media group) transactions
+- Works for both buy and sell transactions
+- Case-insensitive and flexible spacing: `fee-3039`, `Fee - 3039`, `FEE-3039` all work
+
+#### How It Works - Sell Transaction
+1. Customer posts sell transaction with MMK receipt
+2. Staff replies with USDT receipt and optional fee text
+3. Bot OCRs customer's MMK receipt (e.g., 15,197,246 MMK)
+4. Bot detects fee in staff's reply (e.g., fee-3039)
+5. Bot calculates total: 15,197,246 + 3,039 = 15,200,285 MMK
+6. Bot verifies total matches expected amount
+7. Bot adds total MMK to staff's account
+
+#### How It Works - Buy Transaction
+1. Customer posts buy transaction with USDT receipt
+2. Staff replies with MMK receipt and optional fee text
+3. Bot OCRs staff's MMK receipt (e.g., 2,500,000 MMK)
+4. Bot detects fee in staff's reply (e.g., fee-3000)
+5. Bot calculates total: 2,500,000 + 3,000 = 2,503,000 MMK
+6. Bot verifies total matches expected amount
+7. Bot reduces total MMK from staff's account
+
+#### Use Cases
+- Bank transfer fees not shown in receipt
+- Additional charges that need to be accounted for
+- Service fees added to the transaction
+- Any extra MMK costs in buy or sell transactions
+
+### 📚 Documentation
+- Updated `MMK_FEE_HANDLING.md` with buy and sell examples
+- Added `test_mmk_fee.py` for testing fee detection
+- Includes format examples, error handling, and logging details
+
+### 🔧 Technical Changes
+- Updated `process_buy_transaction()` to detect and add MMK fees
+- Updated `process_buy_transaction_bulk()` to support fees in bulk transactions
+- Updated `process_sell_transaction()` to detect and add MMK fees
+- Updated `process_sell_transaction_bulk()` to support fees in bulk transactions
+- Added regex pattern: `r'fee\s*-\s*([\d,]+(?:\.\d+)?)'`
+- Enhanced logging to show fee breakdown in all transaction types
+
+---
+
+## Version 2.1.0 - Coin Transfer with Network Fee
+
+### 🎉 New Features
+
+#### Coin Transfer Support
+- **New feature**: Coin transfer between USDT accounts with network fee handling
+- Format: `Prefix(Bank) to Prefix(Bank) AMOUNT USDT-FEE USDT(fee) = RECEIVED USDT`
+- Example: `San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT`
+- Automatically reduces sent amount from source account
+- Automatically adds received amount to destination account
+- Network fee is automatically calculated (sent - received)
+- Works in **Accounts Matter** topic
+- Useful for blockchain transfers (TRC20, BEP20, etc.)
+
+#### How It Works
+1. Staff sends receipt photo with transfer details
+2. Bot parses: source account, destination account, sent amount, fee, received amount
+3. Bot reduces sent amount from source USDT account
+4. Bot adds received amount to destination USDT account
+5. Updated balance posted to Auto Balance topic
+
+#### Example Use Cases
+- Binance to Wallet transfers via TRC20
+- Wallet to Binance transfers via BEP20
+- Swift to Wallet transfers with network fees
+- Any USDT transfer between platforms with blockchain fees
+
+### 📚 Documentation
+- Added `COIN_TRANSFER.md` with detailed guide
+- Includes format examples and error messages
+- Explains difference from regular internal transfers
+
+---
+
 ## Version 2.0.0 - Staff-Specific Balance Tracking
 
 ### 🎉 Major Features

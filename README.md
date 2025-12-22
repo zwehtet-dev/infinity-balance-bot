@@ -7,9 +7,11 @@ Clean, minimal Telegram bot for managing MMK and USDT balances independently wit
 - ✅ **Staff-Specific Tracking**: Each staff member has their own bank accounts
 - 🔍 **OCR Recognition**: Automatic bank detection from receipts using GPT-4 Vision
 - 💱 **Buy/Sell Processing**: Handles both transaction types with staff attribution
+- 💰 **MMK Fee Handling**: Staff can add fees to sell transactions (e.g., fee-3039)
 - 📊 **Auto Balance Loading**: Reads balance from auto balance topic
 - 🏦 **Multi-Bank Support**: CB, KBZ, Kpay, Kpay Partner, Wave, AYA, Yoma, Binance
 - 🔄 **Internal Transfers**: Transfer between staff accounts in Accounts Matter topic
+- 💸 **Coin Transfers**: USDT transfers with network fee handling (TRC20, BEP20, etc.)
 - 💾 **SQLite Database**: Stores user-to-prefix mappings
 
 ## Setup
@@ -102,6 +104,28 @@ Bot detects amount, transfers between accounts, and updates balance
 - `/load` - Load balance from message (reply to balance message)
 - `/set_user <prefix>` - Set user prefix (reply to user's message)
 - `/test` - Test connection and configuration
+
+## Testing
+
+Comprehensive testing documentation available:
+
+- **[TESTING_CHECKLIST.md](TESTING_CHECKLIST.md)** - Complete testing checklist (57 tests)
+- **[TEST_SCENARIOS.md](TEST_SCENARIOS.md)** - Detailed test scenarios with examples
+- **[QUICK_TEST_GUIDE.md](QUICK_TEST_GUIDE.md)** - 15-minute quick test guide
+
+**Automated Tests:**
+```bash
+python test_balance_parsing.py
+python test_coin_transfer.py
+python test_mmk_fee.py
+```
+
+**Quick Smoke Test (5 minutes):**
+1. Start bot and load balance
+2. Test buy transaction (with and without fee)
+3. Test sell transaction (with and without fee)
+4. Test coin transfer
+5. Verify all commands work
 
 ## How It Works
 

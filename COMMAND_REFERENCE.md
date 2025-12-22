@@ -306,6 +306,29 @@ Staff replies:
 [MMK receipt photo]
 ```
 
+**With MMK Fee:**
+```
+Customer posts:
+Buy 100 USDT = 2,503,000 MMK
+[Customer's USDT receipt]
+
+Staff replies:
+[MMK receipt photo showing 2,500,000 MMK]
+fee-3000
+```
+
+**How Fee Works:**
+- Bot detects 2,500,000 MMK from staff's receipt
+- Bot detects "fee-3000" in staff's reply
+- Bot calculates: 2,500,000 + 3,000 = 2,503,000 MMK
+- Bot reduces 2,503,000 MMK from staff's account
+
+**Fee Format Variations:**
+- `fee-3000` (standard)
+- `fee - 3000` (with spaces)
+- `Fee-5000` (case insensitive)
+- `FEE - 1,234` (with comma)
+
 ---
 
 ### Sell Transaction
@@ -320,6 +343,31 @@ Sell 100 USDT = 2,500,000 MMK
 Staff replies:
 [USDT receipt photo - Binance/Swift/Wallet]
 ```
+
+**With MMK Fee:**
+```
+Customer posts:
+Sell 600 USDT = 15,200,285 MMK
+[Customer's MMK receipt showing 15,197,246 MMK]
+
+Staff replies:
+[USDT receipt photo]
+fee-3039
+```
+
+**How Fee Works:**
+- Bot detects 15,197,246 MMK from customer's receipt
+- Bot detects "fee-3039" in staff's reply
+- Bot calculates: 15,197,246 + 3,039 = 15,200,285 MMK
+- Bot adds 15,200,285 MMK to staff's account
+
+**Fee Format Variations:**
+- `fee-3039` (standard)
+- `fee - 3039` (with spaces)
+- `Fee-5000` (case insensitive)
+- `FEE - 1,234` (with comma)
+
+**See:** [MMK_FEE_HANDLING.md](MMK_FEE_HANDLING.md) for detailed guide
 
 ---
 
@@ -351,6 +399,37 @@ In Accounts Matter topic:
 San(Wave Channel) to NDT(Wave)
 [Transfer receipt photo]
 ```
+
+---
+
+### Coin Transfer with Network Fee
+Transfer USDT between accounts with blockchain network fees.
+
+**Format:**
+```
+In Accounts Matter topic:
+San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+[TRC20/BEP20 receipt photo]
+```
+
+**Components:**
+- `San (binance)` - Source USDT account
+- `OKM(Wallet)` - Destination USDT account
+- `10 USDT` - Amount sent from source
+- `0.47 USDT(fee)` - Network fee
+- `9.53 USDT` - Amount received at destination
+
+**Process:**
+- Reduces 10 USDT from San(binance)
+- Adds 9.53 USDT to OKM(Wallet)
+- Fee automatically calculated (10 - 9.53 = 0.47)
+
+**Use Cases:**
+- TRC20 transfers (Tron network)
+- BEP20 transfers (BSC network)
+- Any blockchain USDT transfer with fees
+
+**See:** [COIN_TRANSFER.md](COIN_TRANSFER.md) for detailed guide
 
 ---
 
