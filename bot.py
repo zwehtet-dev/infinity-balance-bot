@@ -237,6 +237,30 @@ async def send_command_response(context, response_text, parse_mode=None):
             parse_mode=parse_mode
         )
 
+async def send_status_message(context, status_text, parse_mode=None):
+    """Send status message (success/processing/info) to alert topic
+    
+    Args:
+        context: The context object for sending messages
+        status_text: The status text to send
+        parse_mode: Optional parse mode (HTML, Markdown, etc.)
+    """
+    if ALERT_TOPIC_ID:
+        # Send to alert topic
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=ALERT_TOPIC_ID,
+            text=status_text,
+            parse_mode=parse_mode
+        )
+    else:
+        # Fallback: send to general chat (shouldn't happen if ALERT_TOPIC_ID is configured)
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=status_text,
+            parse_mode=parse_mode
+        )
+
 # Storage for tracking multiple photo replies to same transaction
 # Format: {original_message_id: {'amounts': [amount1, amount2], 'bank': bank_obj, 'expected': amount, 'type': 'buy/sell'}}
 pending_transactions = {}
@@ -861,18 +885,23 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     logger.info(f"Buy transaction {original_message_id}: Added {total_mmk:,.0f}, Total: {total_detected_mmk:,.0f} from {photo_count} photo(s)")
     
-    # Check if total amount matches (allow 100 MMK difference)
-    if abs(total_detected_mmk - tx_info['mmk']) > 100:
-        # await message.reply_text(
-        #     f"📝 Received {photo_count} photo(s)\n"
-        #     f"Total: {total_detected_mmk:,.0f} MMK\n"
-        #     f"Expected: {tx_info['mmk']:,.0f} MMK\n\n"
-        #     f"⏳ Send more photos if needed"
-        # )
-        logger.info(f"Received {photo_count} photo(s), Total: {total_detected_mmk:,.0f} MMK, Expected: {tx_info['mmk']:,.0f} MMK - waiting for more photos")
-        return
+    # Check if total amount matches (allow 50% tolerance for multiple receipts)
+    if abs(total_detected_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> Buy\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Detected (from OCR):</b> {total_detected_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(total_detected_mmk - tx_info['mmk']):,.0f} MMK\n\n"
+            f"⚠️ Processing with OCR detected amount: {total_detected_mmk:,.0f} MMK",
+            parse_mode='HTML'
+        )
+        logger.warning(f"MMK amount mismatch: Expected {tx_info['mmk']:,.0f}, Detected {total_detected_mmk:,.0f}, Difference: {abs(total_detected_mmk - tx_info['mmk']):,.0f} - Processing anyway")
     
-    # Amount matches! Process the transaction
+    # Process the transaction with detected amount
     # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_mmk:,.0f} MMK\n\nProcessing...")
     
     # Check if sufficient balance before reducing
@@ -905,15 +934,62 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             del pending_transactions[original_message_id]
         return
     
+    # Detect USDT amount from user's original receipt
+    original_message = message.reply_to_message
+    detected_usdt = tx_info['usdt']  # Default to message amount
+    
+    if original_message and original_message.photo:
+        # Get user's USDT receipt
+        user_photo = original_message.photo[-1]
+        user_file = await context.bot.get_file(user_photo.file_id)
+        user_bytes = await user_file.download_as_bytearray()
+        user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+        
+        # Try to detect USDT amount from receipt
+        usdt_result = await ocr_extract_usdt_with_fee(user_base64)
+        
+        if usdt_result and usdt_result['total_amount'] > 0:
+            detected_usdt = usdt_result['total_amount']
+            logger.info(f"Detected USDT from user receipt: {detected_usdt:.4f} (amount: {usdt_result['amount']:.4f} + fee: {usdt_result['network_fee']:.4f})")
+            
+            # If message amount is 0 or invalid, send warning
+            if tx_info['usdt'] == 0 or tx_info['usdt'] is None:
+                await send_status_message(
+                    context,
+                    f"⚠️ <b>USDT Amount from OCR</b>\n\n"
+                    f"<b>Transaction:</b> Buy\n"
+                    f"<b>Staff:</b> {user_prefix}\n"
+                    f"<b>Message Amount:</b> {tx_info['usdt']:.4f} USDT (invalid)\n"
+                    f"<b>Detected from Receipt:</b> {detected_usdt:.4f} USDT\n\n"
+                    f"✅ Using OCR detected amount: {detected_usdt:.4f} USDT",
+                    parse_mode='HTML'
+                )
+            # If amounts don't match, send warning
+            elif abs(detected_usdt - tx_info['usdt']) > max(0.5, tx_info['usdt'] * 0.005):
+                await send_status_message(
+                    context,
+                    f"⚠️ <b>USDT Amount Mismatch Warning</b>\n\n"
+                    f"<b>Transaction:</b> Buy\n"
+                    f"<b>Staff:</b> {user_prefix}\n"
+                    f"<b>Expected (from message):</b> {tx_info['usdt']:.4f} USDT\n"
+                    f"<b>Detected (from OCR):</b> {detected_usdt:.4f} USDT\n"
+                    f"<b>Difference:</b> {abs(detected_usdt - tx_info['usdt']):.4f} USDT\n\n"
+                    f"⚠️ Processing with OCR detected amount: {detected_usdt:.4f} USDT",
+                    parse_mode='HTML'
+                )
+                logger.warning(f"USDT amount mismatch: Expected {tx_info['usdt']:.4f}, Detected {detected_usdt:.4f} - Processing with detected amount")
+        else:
+            logger.warning(f"Could not detect USDT from user receipt, using message amount: {tx_info['usdt']:.4f}")
+    
     # Update USDT to the receiving account (not staff-specific)
     receiving_usdt_account = get_receiving_usdt_account()
     usdt_updated = False
     
     for bank in balances['usdt_banks']:
         if banks_match(bank['bank_name'], receiving_usdt_account):
-            bank['amount'] += tx_info['usdt']
+            bank['amount'] += detected_usdt
             usdt_updated = True
-            logger.info(f"Added {tx_info['usdt']:.4f} USDT to receiving account: {receiving_usdt_account}")
+            logger.info(f"Added {detected_usdt:.4f} USDT to receiving account: {receiving_usdt_account}")
             break
     
     if not usdt_updated:
@@ -937,11 +1013,20 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     context.chat_data['balances'] = balances
     
-    # await message.reply_text(
-    #     f"✅ Buy processed!\n\n"
-    #     f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-    #     f"USDT: +{tx_info['usdt']:.4f}"
-    # )
+    # Send success message to alert topic
+    mmk_display = f"{total_detected_mmk:,.0f}"
+    if mmk_fee > 0:
+        mmk_display += f" (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    
+    await send_status_message(
+        context,
+        f"✅ <b>Buy Transaction Processed</b>\n\n"
+        f"<b>Staff:</b> {user_prefix}\n"
+        f"<b>MMK:</b> -{mmk_display} ({detected_bank['bank_name']})\n"
+        f"<b>USDT:</b> +{detected_usdt:.4f} ({receiving_usdt_account})\n"
+        f"<b>Photos:</b> {photo_count}",
+        parse_mode='HTML'
+    )
     
     # Clean up pending transaction
     if original_message_id in pending_transactions:
@@ -999,15 +1084,23 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     if mmk_fee > 0:
         logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
     
-    # Verify MMK (use total_mmk for comparison)
-    if abs(total_mmk - tx_info['mmk']) > 100:
-        # await message.reply_text(
-        #     f"⚠️ MMK mismatch!\n"
-        #     f"Expected: {tx_info['mmk']:,.0f}\n"
-        #     f"Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
-        # )
-        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
-        return
+    # Verify MMK (compare OCR detected amount with message amount)
+    if abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> Sell\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Detected (from OCR):</b> {total_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK\n\n"
+            f"⚠️ Processing with OCR detected amount: {total_mmk:,.0f} MMK",
+            parse_mode='HTML'
+        )
+        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
+    
+    # Continue processing with OCR detected amount (total_mmk)
     
     # Get staff's USDT receipt(s) - support multiple photos
     if not message.photo:
@@ -1053,18 +1146,13 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     logger.info(f"Sell transaction {original_message_id}: Added {detected_usdt:.4f} USDT, Total: {total_detected_usdt:.4f} from {photo_count} photo(s)")
     
-    # Check if USDT amount matches (allow 0.03 tolerance for USDT)
-    if abs(total_detected_usdt - tx_info['usdt']) > 0.03:
-        # await message.reply_text(
-        #     f"📝 Received {photo_count} photo(s)\n"
-        #     f"Total: {total_detected_usdt:.4f} USDT\n"
-        #     f"Expected: {tx_info['usdt']:.4f} USDT\n\n"
-        #     f"⏳ Send more photos if needed"
-        # )
-        logger.info(f"Received {photo_count} photo(s), Total: {total_detected_usdt:.4f} USDT, Expected: {tx_info['usdt']:.4f} USDT - waiting for more photos")
-        return
+    # Check if USDT amount matches (allow 0.5 USDT or 0.5% tolerance, whichever is larger)
+    tolerance = max(0.5, tx_info['usdt'] * 0.005)  # 0.5 USDT or 0.5% of amount
+    if abs(total_detected_usdt - tx_info['usdt']) > tolerance:
+        # Log warning but continue processing
+        logger.warning(f"USDT amount mismatch: Expected {tx_info['usdt']:.4f}, Detected {total_detected_usdt:.4f}, Difference: {abs(total_detected_usdt - tx_info['usdt']):.4f}, Tolerance: {tolerance:.4f} - Processing anyway")
     
-    # Amount matches! Process the transaction
+    # Process the transaction with detected amount
     # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
     # Update balances for the specific staff member's bank (use total_mmk including fee)
@@ -1077,47 +1165,41 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
                 logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']}")
             break
     
-    # Update USDT for the specific staff member's Swift or Wallet account
+    # Update USDT for the specific staff member's Swift, Wallet, or Binance account
     usdt_updated = False
     stored_bank_type = pending_transactions[original_message_id].get('bank_type', 'wallet')
     
-    # Find the staff's USDT bank that matches the bank type
+    # Construct expected bank name based on detected type and staff prefix
+    # Example: If bank_type is "swift" and user_prefix is "San", look for "San(Swift)"
+    bank_type_capitalized = stored_bank_type.capitalize()  # swift -> Swift, wallet -> Wallet, binance -> Binance
+    expected_bank_name = f"{user_prefix}({bank_type_capitalized})"
+    
+    logger.info(f"Looking for USDT bank: {expected_bank_name} (detected type: {stored_bank_type})")
+    
+    # Find the staff's USDT bank that matches the constructed name
     for bank in balances['usdt_banks']:
-        if bank.get('prefix') == user_prefix:
-            # Check if bank name contains Swift, Wallet, or Binance based on detected type
-            bank_name_lower = bank['bank_name'].lower()
-            is_swift = 'swift' in bank_name_lower
-            is_wallet = 'wallet' in bank_name_lower
-            is_binance = 'binance' in bank_name_lower
-            
-            # Match bank type
-            type_matches = (
-                (stored_bank_type == 'swift' and is_swift) or
-                (stored_bank_type == 'wallet' and is_wallet) or
-                (stored_bank_type == 'binance' and is_binance)
-            )
-            
-            if type_matches:
-                # Check if sufficient USDT balance
-                if bank['amount'] < total_detected_usdt:
-                    # await message.reply_text(
-                    #     f"❌ Insufficient USDT balance!\n\n"
-                    #     f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
-                    #     f"Required: {total_detected_usdt:.4f} USDT\n"
-                    #     f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
-                    # )
-                    logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
-                    # Clean up pending transaction
-                    if original_message_id in pending_transactions:
-                        del pending_transactions[original_message_id]
-                    return
-                bank['amount'] -= total_detected_usdt
-                usdt_updated = True
-                logger.info(f"Reduced {total_detected_usdt:.4f} USDT from {bank['bank_name']} ({stored_bank_type})")
-                break
+        if banks_match(bank['bank_name'], expected_bank_name):
+            # Check if sufficient USDT balance
+            if bank['amount'] < total_detected_usdt:
+                logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
+                await send_alert(message, 
+                    f"❌ Insufficient USDT balance!\n\n"
+                    f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                    f"Required: {total_detected_usdt:.4f} USDT\n"
+                    f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT", 
+                    context)
+                # Clean up pending transaction
+                if original_message_id in pending_transactions:
+                    del pending_transactions[original_message_id]
+                return
+            bank['amount'] -= total_detected_usdt
+            usdt_updated = True
+            logger.info(f"Reduced {total_detected_usdt:.4f} USDT from {bank['bank_name']} ({stored_bank_type})")
+            break
     
     if not usdt_updated:
-        logger.warning(f"No USDT {stored_bank_type} bank found for prefix '{user_prefix}'")
+        logger.warning(f"USDT bank not found: {expected_bank_name} (detected type: {stored_bank_type})")
+        await send_alert(message, f"⚠️ Warning: USDT bank '{expected_bank_name}' not found in balance. USDT not deducted.", context)
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -1137,11 +1219,23 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     context.chat_data['balances'] = balances
     
-    # await message.reply_text(
-    #     f"✅ Sell processed!\n\n"
-    #     f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-    #     f"USDT: -{total_detected_usdt:.4f}"
-    # )
+    # Send success message to alert topic
+    mmk_display = f"{total_mmk:,.0f}"
+    if mmk_fee > 0:
+        mmk_display += f" (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    
+    usdt_bank_display = expected_bank_name if usdt_updated else f"{expected_bank_name} (NOT FOUND)"
+    
+    await send_status_message(
+        context,
+        f"✅ <b>Sell Transaction Processed</b>\n\n"
+        f"<b>Staff:</b> {user_prefix}\n"
+        f"<b>MMK:</b> +{mmk_display} ({detected_bank['bank_name']})\n"
+        f"<b>USDT:</b> -{total_detected_usdt:.4f} ({usdt_bank_display})\n"
+        f"<b>Bank Type:</b> {stored_bank_type}\n"
+        f"<b>Photos:</b> {photo_count}",
+        parse_mode='HTML'
+    )
     
     # Clean up pending transaction
     if original_message_id in pending_transactions:
@@ -1439,15 +1533,25 @@ Note: Return the amount as a positive number, ignore any minus signs."""
     
     context.chat_data['balances'] = balances
     
-    # await message.reply_text(
-    #     f"✅ Internal transfer processed!\n\n"
-    #     f"From: {from_full_name}\n"
-    #     f"To: {to_full_name}\n"
-    #     f"Amount: {amount:,.2f}\n\n"
-    #     f"New balances:\n"
-    #     f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
-    #     f"{to_full_name}: {to_bank_obj['amount']:,.2f}"
-    # )
+    # Determine currency type for display
+    currency = "MMK"
+    if is_usdt_transfer:
+        currency = "USDT"
+    elif 'thb' in from_full_name.lower() or 'thb' in to_full_name.lower():
+        currency = "THB"
+    
+    # Send success message to alert topic
+    await send_status_message(
+        context,
+        f"✅ <b>Internal Transfer Processed</b>\n\n"
+        f"<b>From:</b> {from_full_name}\n"
+        f"<b>To:</b> {to_full_name}\n"
+        f"<b>Amount:</b> {amount:,.4f} {currency}\n\n"
+        f"<b>New Balances:</b>\n"
+        f"{from_full_name}: {from_bank_obj['amount']:,.4f} {currency}\n"
+        f"{to_full_name}: {to_bank_obj['amount']:,.4f} {currency}",
+        parse_mode='HTML'
+    )
 
 # ============================================================================
 # MESSAGE HANDLERS
@@ -1484,13 +1588,23 @@ async def process_media_group_delayed(update: Update, context: ContextTypes.DEFA
     # Extract transaction info
     tx_info = extract_transaction_info(original_text)
     
-    if not tx_info['type'] or not tx_info['usdt'] or not tx_info['mmk']:
-        logger.info(f"❌ Original message is not a valid buy/sell message")
+    # Check if transaction type is valid (Buy or Sell)
+    if not tx_info['type']:
+        logger.info(f"❌ Original message is not a Buy/Sell transaction")
         if media_group_id in media_groups:
             del media_groups[media_group_id]
         if media_group_id in media_group_locks:
             del media_group_locks[media_group_id]
         return
+    
+    # Allow transactions with 0 or missing amounts - will use OCR to detect
+    if tx_info.get('usdt') is None or tx_info.get('mmk') is None or tx_info.get('usdt') == 0 or tx_info.get('mmk') == 0:
+        logger.warning(f"Transaction has invalid amounts (USDT: {tx_info.get('usdt')}, MMK: {tx_info.get('mmk')}) - Will use OCR to detect amounts")
+        # Set to 0 if None to avoid errors
+        if tx_info.get('usdt') is None:
+            tx_info['usdt'] = 0
+        if tx_info.get('mmk') is None:
+            tx_info['mmk'] = 0
     
     try:
         if tx_info['type'] == 'buy':
@@ -1573,16 +1687,22 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         logger.info(f"Bulk processing complete: Total {total_detected_mmk:,.0f} MMK from {len(photos)} photos")
     
     # Check if total amount matches (use total_mmk for comparison)
-    if abs(total_mmk - tx_info['mmk']) > 100:
-        # await message.reply_text(
-        #     f"⚠️ Amount mismatch!\n"
-        #     f"Expected: {tx_info['mmk']:,.0f} MMK\n"
-        #     f"Detected: {total_mmk:,.0f} MMK (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
-        # )
-        logger.error(f"Amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {total_mmk:,.0f} MMK (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
-        return
+    if abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> Buy (Bulk)\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Detected (from OCR):</b> {total_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK\n\n"
+            f"⚠️ Processing with OCR detected amount: {total_mmk:,.0f} MMK",
+            parse_mode='HTML'
+        )
+        logger.warning(f"Amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {total_mmk:,.0f} MMK (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing anyway")
     
-    # Amount matches! Process the transaction
+    # Process the transaction with detected amount
     # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_mmk:,.0f} MMK\n\nProcessing...")
     
     # Check if sufficient balance before reducing (use total_mmk)
@@ -1610,15 +1730,62 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         await send_alert(message, f"❌ Bank not found: {detected_bank['bank_name']}", context)
         return
     
+    # Detect USDT amount from user's original receipt
+    original_message = message.reply_to_message
+    detected_usdt = tx_info['usdt']  # Default to message amount
+    
+    if original_message and original_message.photo:
+        # Get user's USDT receipt
+        user_photo = original_message.photo[-1]
+        user_file = await context.bot.get_file(user_photo.file_id)
+        user_bytes = await user_file.download_as_bytearray()
+        user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+        
+        # Try to detect USDT amount from receipt
+        usdt_result = await ocr_extract_usdt_with_fee(user_base64)
+        
+        if usdt_result and usdt_result['total_amount'] > 0:
+            detected_usdt = usdt_result['total_amount']
+            logger.info(f"Detected USDT from user receipt: {detected_usdt:.4f} (amount: {usdt_result['amount']:.4f} + fee: {usdt_result['network_fee']:.4f})")
+            
+            # If message amount is 0 or invalid, send warning
+            if tx_info['usdt'] == 0 or tx_info['usdt'] is None:
+                await send_status_message(
+                    context,
+                    f"⚠️ <b>USDT Amount from OCR</b>\n\n"
+                    f"<b>Transaction:</b> Buy (Bulk)\n"
+                    f"<b>Staff:</b> {user_prefix}\n"
+                    f"<b>Message Amount:</b> {tx_info['usdt']:.4f} USDT (invalid)\n"
+                    f"<b>Detected from Receipt:</b> {detected_usdt:.4f} USDT\n\n"
+                    f"✅ Using OCR detected amount: {detected_usdt:.4f} USDT",
+                    parse_mode='HTML'
+                )
+            # If amounts don't match, send warning
+            elif abs(detected_usdt - tx_info['usdt']) > max(0.5, tx_info['usdt'] * 0.005):
+                await send_status_message(
+                    context,
+                    f"⚠️ <b>USDT Amount Mismatch Warning</b>\n\n"
+                    f"<b>Transaction:</b> Buy (Bulk)\n"
+                    f"<b>Staff:</b> {user_prefix}\n"
+                    f"<b>Expected (from message):</b> {tx_info['usdt']:.4f} USDT\n"
+                    f"<b>Detected (from OCR):</b> {detected_usdt:.4f} USDT\n"
+                    f"<b>Difference:</b> {abs(detected_usdt - tx_info['usdt']):.4f} USDT\n\n"
+                    f"⚠️ Processing with OCR detected amount: {detected_usdt:.4f} USDT",
+                    parse_mode='HTML'
+                )
+                logger.warning(f"USDT amount mismatch: Expected {tx_info['usdt']:.4f}, Detected {detected_usdt:.4f} - Processing with detected amount")
+        else:
+            logger.warning(f"Could not detect USDT from user receipt, using message amount: {tx_info['usdt']:.4f}")
+    
     # Update USDT to the receiving account (not staff-specific)
     receiving_usdt_account = get_receiving_usdt_account()
     usdt_updated = False
     
     for bank in balances['usdt_banks']:
         if banks_match(bank['bank_name'], receiving_usdt_account):
-            bank['amount'] += tx_info['usdt']
+            bank['amount'] += detected_usdt
             usdt_updated = True
-            logger.info(f"Added {tx_info['usdt']:.4f} USDT to receiving account: {receiving_usdt_account}")
+            logger.info(f"Added {detected_usdt:.4f} USDT to receiving account: {receiving_usdt_account}")
             break
     
     if not usdt_updated:
@@ -1642,11 +1809,20 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     context.chat_data['balances'] = balances
     
-    # await message.reply_text(
-    #     f"✅ Buy processed!\n\n"
-    #     f"MMK: -{total_detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-    #     f"USDT: +{tx_info['usdt']:.4f}"
-    # )
+    # Send success message to alert topic
+    mmk_display = f"{total_mmk:,.0f}"
+    if mmk_fee > 0:
+        mmk_display += f" (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    
+    await send_status_message(
+        context,
+        f"✅ <b>Buy Transaction Processed (Bulk)</b>\n\n"
+        f"<b>Staff:</b> {user_prefix}\n"
+        f"<b>MMK:</b> -{mmk_display} ({detected_bank['bank_name']})\n"
+        f"<b>USDT:</b> +{detected_usdt:.4f} ({receiving_usdt_account})\n"
+        f"<b>Photos:</b> {len(photos)} MMK receipts",
+        parse_mode='HTML'
+    )
 
 async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict, photos: list, message):
     """Process SELL transaction with multiple USDT photos sent as media group"""
@@ -1699,15 +1875,23 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     if mmk_fee > 0:
         logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
     
-    # Verify MMK (use total_mmk for comparison)
-    if abs(total_mmk - tx_info['mmk']) > 100:
-        # await message.reply_text(
-        #     f"⚠️ MMK mismatch!\n"
-        #     f"Expected: {tx_info['mmk']:,.0f}\n"
-        #     f"Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
-        # )
-        logger.error(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
-        return
+    # Verify MMK (compare OCR detected amount with message amount)
+    if abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> Sell (Bulk)\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Detected (from OCR):</b> {total_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK\n\n"
+            f"⚠️ Processing with OCR detected amount: {total_mmk:,.0f} MMK",
+            parse_mode='HTML'
+        )
+        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
+    
+    # Continue processing with OCR detected amount (total_mmk)
     
     # Process all USDT photos in bulk
     # await message.reply_text(f"📸 Processing {len(photos)} USDT photos...")
@@ -1766,40 +1950,34 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     # Update USDT for the specific staff member's Swift, Wallet, or Binance account
     usdt_updated = False
     
-    # Find the staff's USDT bank that matches the bank type
+    # Construct expected bank name based on detected type and staff prefix
+    # Example: If bank_type is "swift" and user_prefix is "San", look for "San(Swift)"
+    bank_type_capitalized = detected_bank_type.capitalize()  # swift -> Swift, wallet -> Wallet, binance -> Binance
+    expected_bank_name = f"{user_prefix}({bank_type_capitalized})"
+    
+    logger.info(f"Looking for USDT bank: {expected_bank_name} (detected type: {detected_bank_type})")
+    
+    # Find the staff's USDT bank that matches the constructed name
     for bank in balances['usdt_banks']:
-        if bank.get('prefix') == user_prefix:
-            # Check if bank name contains Swift, Wallet, or Binance based on detected type
-            bank_name_lower = bank['bank_name'].lower()
-            is_swift = 'swift' in bank_name_lower
-            is_wallet = 'wallet' in bank_name_lower
-            is_binance = 'binance' in bank_name_lower
-            
-            # Match bank type
-            type_matches = (
-                (detected_bank_type == 'swift' and is_swift) or
-                (detected_bank_type == 'wallet' and is_wallet) or
-                (detected_bank_type == 'binance' and is_binance)
-            )
-            
-            if type_matches:
-                # Check if sufficient USDT balance
-                if bank['amount'] < total_detected_usdt:
-                    # await message.reply_text(
-                    #     f"❌ Insufficient USDT balance!\n\n"
-                    #     f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
-                    #     f"Required: {total_detected_usdt:.4f} USDT\n"
-                    #     f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT"
-                    # )
-                    logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
-                    return
-                bank['amount'] -= total_detected_usdt
-                usdt_updated = True
-                logger.info(f"Reduced {total_detected_usdt:.4f} USDT from {bank['bank_name']} ({detected_bank_type})")
-                break
+        if banks_match(bank['bank_name'], expected_bank_name):
+            # Check if sufficient USDT balance
+            if bank['amount'] < total_detected_usdt:
+                logger.error(f"Insufficient USDT balance! {bank['bank_name']}: {bank['amount']:.4f} USDT, Required: {total_detected_usdt:.4f} USDT, Shortage: {total_detected_usdt - bank['amount']:.4f} USDT")
+                await send_alert(message, 
+                    f"❌ Insufficient USDT balance!\n\n"
+                    f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                    f"Required: {total_detected_usdt:.4f} USDT\n"
+                    f"Shortage: {total_detected_usdt - bank['amount']:.4f} USDT", 
+                    context)
+                return
+            bank['amount'] -= total_detected_usdt
+            usdt_updated = True
+            logger.info(f"Reduced {total_detected_usdt:.4f} USDT from {bank['bank_name']} ({detected_bank_type})")
+            break
     
     if not usdt_updated:
-        logger.warning(f"No USDT {detected_bank_type} bank found for prefix '{user_prefix}'")
+        logger.warning(f"USDT bank not found: {expected_bank_name} (detected type: {detected_bank_type})")
+        await send_alert(message, f"⚠️ Warning: USDT bank '{expected_bank_name}' not found in balance. USDT not deducted.", context)
     
     # Send new balance
     new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -1819,11 +1997,23 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     context.chat_data['balances'] = balances
     
-    # await message.reply_text(
-    #     f"✅ Sell processed!\n\n"
-    #     f"MMK: +{detected_mmk:,.0f} ({detected_bank['bank_name']})\n"
-    #     f"USDT: -{total_detected_usdt:.4f}"
-    # )
+    # Send success message to alert topic
+    mmk_display = f"{total_mmk:,.0f}"
+    if mmk_fee > 0:
+        mmk_display += f" (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    
+    usdt_bank_display = expected_bank_name if usdt_updated else f"{expected_bank_name} (NOT FOUND)"
+    
+    await send_status_message(
+        context,
+        f"✅ <b>Sell Transaction Processed (Bulk)</b>\n\n"
+        f"<b>Staff:</b> {user_prefix}\n"
+        f"<b>MMK:</b> +{mmk_display} ({detected_bank['bank_name']})\n"
+        f"<b>USDT:</b> -{total_detected_usdt:.4f} ({usdt_bank_display})\n"
+        f"<b>Bank Type:</b> {detected_bank_type}\n"
+        f"<b>Photos:</b> {len(photos)} USDT receipts",
+        parse_mode='HTML'
+    )
 
 async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict):
     """P2P SELL: Staff sells USDT to another exchange (not to customer)
@@ -1930,14 +2120,23 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         
         logger.info(f"P2P Sell: Matched to {matched_bank_name} with {best_confidence}% confidence")
     
-    # Verify MMK amount matches
-    if abs(detected_mmk - tx_info['mmk']) > 100:
-        await message.reply_text(
-            f"⚠️ MMK amount mismatch!\n"
-            f"Expected: {tx_info['mmk']:,.0f} MMK\n"
-            f"Detected: {detected_mmk:,.0f} MMK"
+    # Verify MMK amount (compare OCR detected amount with message amount)
+    if abs(detected_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> P2P Sell\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Detected (from OCR):</b> {detected_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(detected_mmk - tx_info['mmk']):,.0f} MMK\n\n"
+            f"⚠️ Processing with OCR detected amount: {detected_mmk:,.0f} MMK",
+            parse_mode='HTML'
         )
-        return
+        logger.warning(f"MMK amount mismatch! Expected: {tx_info['mmk']:,.0f} MMK, Detected: {detected_mmk:,.0f} MMK - Processing with detected amount")
+    
+    # Continue processing with OCR detected amount
     
     # Add MMK to detected bank
     for bank in balances['mmk_banks']:
@@ -2133,9 +2332,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Single photo (not part of media group)
     tx_info = extract_transaction_info(original_text)
     
-    if not tx_info['type'] or not tx_info.get('usdt') or not tx_info.get('mmk'):
-        logger.info(f"   ⏭️ Skipping: Not a valid Buy/Sell transaction message")
+    # Check if transaction type is valid (Buy or Sell)
+    if not tx_info['type']:
+        logger.info(f"   ⏭️ Skipping: Not a Buy/Sell transaction message")
         return
+    
+    # Allow transactions with 0 or missing amounts - will use OCR to detect
+    if tx_info.get('usdt') is None or tx_info.get('mmk') is None or tx_info.get('usdt') == 0 or tx_info.get('mmk') == 0:
+        logger.warning(f"   ⚠️ Transaction has invalid amounts (USDT: {tx_info.get('usdt')}, MMK: {tx_info.get('mmk')}) - Will use OCR to detect amounts")
+        # Set to 0 if None to avoid errors
+        if tx_info.get('usdt') is None:
+            tx_info['usdt'] = 0
+        if tx_info.get('mmk') is None:
+            tx_info['mmk'] = 0
     
     logger.info(f"   🔄 Processing {tx_info['type'].upper()} transaction: {tx_info['usdt']} USDT = {tx_info['mmk']:,.0f} MMK")
     

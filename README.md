@@ -103,6 +103,7 @@ Bot detects amount, transfers between accounts, and updates balance
 - `/balance` - Show current balance
 - `/load` - Load balance from message (reply to balance message)
 - `/set_user <prefix>` - Set user prefix (reply to user's message)
+- `/list_users` - List all user mappings
 - `/test` - Test connection and configuration
 
 ## Testing

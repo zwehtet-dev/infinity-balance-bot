@@ -3,12 +3,19 @@
 ## Overview
 The bot now supports coin transfers between USDT accounts with automatic network fee handling. This is useful when staff transfer USDT between different platforms (e.g., Binance to Wallet) using blockchain networks like TRC20 (Tron).
 
+**Important:** Photo is optional - bot uses amounts from text, not OCR!
+
 ## Format
-When staff sends a coin transfer receipt in the **Accounts Matter** topic, they should use this format:
+When staff sends a coin transfer message in the **Accounts Matter** topic, they should use this format:
 
 ```
-[Receipt Photo]
 San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+```
+
+Or with optional photo:
+```
+[Receipt Photo]
+San (binance) to OKM(swift) 10 USDT-0.47 USDT(fee) = 9.53 USDT
 ```
 
 ### Format Breakdown:
@@ -21,29 +28,53 @@ San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
 ## How It Works
 
 1. **Staff sends message** in Accounts Matter topic with:
-   - Receipt photo (showing the blockchain transaction)
-   - Text in the format above
+   - Text in the format above (REQUIRED)
+   - Receipt photo (OPTIONAL - for reference only)
 
 2. **Bot processes**:
+   - Extracts amounts **from text** (NO OCR)
    - Reduces **10 USDT** from `San(binance)`
    - Adds **9.53 USDT** to `OKM(Wallet)`
    - The 0.47 USDT fee is automatically accounted for
 
 3. **Balance updated** and posted to Auto Balance topic
 
+4. **Success message** sent to Alert topic
+
+## Key Points
+
+### Photo is Optional
+- Bot reads amounts from text, not from photo OCR
+- Photo can be attached for reference/proof
+- This makes processing faster and more accurate
+
+### Text Format is Required
+- Staff must type the amounts correctly in the message
+- Format must match: `Prefix(Bank) to Prefix(Bank) AMOUNT USDT-FEE USDT(fee) = RECEIVED USDT`
+
+### Only in Accounts Matter Topic
+- This feature only works in Accounts Matter topic
+- Will not process in USDT Transfers topic or main chat
+
 ## Examples
 
-### Example 1: Binance to Wallet Transfer
+### Example 1: Binance to Wallet Transfer (No Photo)
 ```
-[TRC20 Receipt Photo]
 San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
 ```
 - Reduces 10 USDT from San(binance)
 - Adds 9.53 USDT to OKM(Wallet)
 
-### Example 2: Wallet to Binance Transfer
+### Example 2: With TRC20 Receipt Photo
 ```
 [TRC20 Receipt Photo]
+San (binance) to OKM(swift) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+```
+- Photo is for reference only
+- Bot uses amounts from text: 10, 0.47, 9.53
+
+### Example 3: Wallet to Binance Transfer
+```
 MMN (Wallet) to MMN (binance) 50 USDT-1.2 USDT(fee) = 48.8 USDT
 ```
 - Reduces 50 USDT from MMN(Wallet)

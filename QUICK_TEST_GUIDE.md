@@ -67,6 +67,7 @@ San (binance) to OKM(Wallet) 10 USDT-0.47 USDT(fee) = 9.53 USDT
 ```
 /start          → Shows help
 /balance        → Shows balance
+/list_users     → Shows all user mappings
 /test           → Shows location info
 /list_mmk_bank  → Shows registered banks
 /show_receiving_usdt_acc → Shows USDT config

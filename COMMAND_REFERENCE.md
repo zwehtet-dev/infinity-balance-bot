@@ -109,6 +109,43 @@ Bot: ✅ Set prefix 'San' for @san_username (ID: 123456789)
 
 ---
 
+### `/list_users`
+List all user prefix mappings.
+
+**Usage:**
+```
+/list_users
+```
+
+**Output:**
+```
+👥 User Prefix Mappings
+
+1. San
+   User ID: 123456789
+   Username: @san_username
+   Created: 2025-12-21 10:30:00
+
+2. TZT
+   User ID: 987654321
+   Username: @tzt_username
+   Created: 2025-12-21 11:00:00
+
+Total Users: 2
+
+Commands:
+• /set_user - Map user to prefix
+• /list_users - Show all mappings
+```
+
+**Use Cases:**
+- View all mapped users
+- Check user IDs for troubleshooting
+- Verify prefix assignments
+- Audit user access
+
+---
+
 ## USDT Configuration
 
 ### `/set_receiving_usdt_acc`

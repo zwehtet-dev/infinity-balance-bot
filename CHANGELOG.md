@@ -1,5 +1,284 @@
 # Changelog
 
+## Version 2.3.7 - Internal Transfer Notifications
+
+### 🐛 Bug Fixes
+
+#### Added Missing Success Notification for Internal Transfers
+- **Fixed**: Internal transfers now send success notifications to alert topic
+- **Shows**: Source account, destination account, transfer amount, and new balances
+- **Currency Detection**: Automatically detects if transfer is MMK, USDT, or THB
+- **Format**: HTML formatted message with clear breakdown
+
+**What was missing:**
+- Internal transfers were processing correctly
+- Balance was updating correctly
+- But no notification was sent to alert topic
+
+**What's fixed:**
+- Success message now sent to alert topic after every internal transfer
+- Shows complete transfer details for verification
+- Includes new balances for both accounts
+
+**Example notification:**
+```
+✅ Internal Transfer Processed
+
+From: San(Binance)
+To: MMN(Binance)
+Amount: 387.5300 USDT
+
+New Balances:
+San(Binance): 1234.5678 USDT
+MMN(Binance): 5678.9012 USDT
+```
+
+## Version 2.3.6 - Buy Transaction USDT Detection
+
+### ✨ Improvements
+
+#### USDT Amount Detection from User Receipt in Buy Transactions
+- **New**: Bot now detects USDT amount from user's original receipt using OCR
+- **Benefit**: Works even when message amount is 0 or invalid (e.g., when other bot has errors)
+- **Applies to**: Both single and bulk buy transactions
+- **Fallback**: If OCR fails, uses message amount as before
+
+**How it works:**
+1. Staff replies to user's USDT receipt with MMK receipt
+2. Bot detects MMK amount from staff's receipt (as before)
+3. **NEW**: Bot also detects USDT amount from user's original receipt
+4. If message amount is 0 or invalid, uses OCR detected amount
+5. If amounts don't match, sends warning but uses OCR amount
+6. Updates receiving USDT account with detected amount
+
+**Example scenario:**
+- User sends USDT receipt showing 100.23 USDT
+- Other bot sends message: "Buy 0 x 3923 = 0" (error)
+- Staff replies with MMK receipt
+- Bot detects: 392,850 MMK from staff receipt
+- Bot detects: 100.23 USDT from user receipt (OCR)
+- Bot updates: -392,850 MMK, +100.23 USDT ✅
+
+**Warnings sent to alert topic:**
+- When message amount is 0/invalid and OCR is used
+- When message amount doesn't match OCR detected amount
+- Shows both amounts and difference for verification
+
+## Version 2.3.5 - Improved USDT Bank Detection
+
+### ✨ Improvements
+
+#### Enhanced USDT Bank Detection in Sell Transactions
+- **Improved**: Bot now constructs the exact USDT bank name based on detected type and staff prefix
+- **Example**: If receipt shows "Swift" and staff is "San", bot updates "San(Swift)" account
+- **Bank Types**: Automatically detects Binance, Swift, or Wallet from receipt
+- **Format**: Constructs bank name as `{Prefix}({BankType})` - e.g., "San(Swift)", "OKM(Wallet)", "NDT(Binance)"
+- **Applies to**: Both single and bulk sell transactions
+
+**How it works:**
+1. Bot detects bank type from USDT receipt (binance/swift/wallet)
+2. Gets staff prefix from replier (e.g., "San")
+3. Constructs expected bank name: "San(Swift)"
+4. Updates the correct USDT account in balance
+
+**Benefits:**
+- More accurate bank matching
+- Clear logging shows which bank is being updated
+- Better error messages when bank not found
+- Success messages show detected bank type
+
+## Version 2.3.4 - Alert Notification Fix
+
+### 🐛 Bug Fixes
+
+#### Fixed Missing send_status_message Function
+- **Fixed**: Added missing `send_status_message()` function that was being called but not defined
+- **Impact**: All transaction status messages and warnings now properly send to alert topic (ID: 1310)
+- **Affected**: Buy transactions, Sell transactions, P2P sell, Internal transfers, and all mismatch warnings
+- **Symptoms**: Bot was crashing when trying to send status messages due to undefined function
+
+**What was broken:**
+- Bot called `send_status_message()` for warnings and success messages
+- Function was never defined, causing crashes
+- Warnings about amount mismatches were not being sent to alert topic
+
+**What's fixed:**
+- Added `send_status_message()` function that sends to alert topic
+- All transaction status messages now work correctly
+- Mismatch warnings properly appear in alert topic
+
+## Version 2.3.3 - BNB Transfer Support
+
+### 🐛 Bug Fixes
+
+#### Increased MMK Tolerance to 1000 MMK
+- **Fixed**: MMK tolerance increased from 100 to 1000 MMK to handle rounding differences
+- **Example**: Transaction with 99,749 MMK expected and 100,000 MMK detected will now process successfully
+- **Applies to**: Buy transactions, Sell transactions, Bulk transactions, and P2P sell transactions
+- **Reason**: OCR may round amounts differently than the original transaction message
+
+### ✨ Improvements
+
+#### Multiple MMK Receipts Support for Sell Transactions
+- **New**: Sell transactions now support multiple MMK receipts in the original message
+- **Example**: User sends 2 receipts of 1,000,000 MMK each = 2,000,000 MMK total
+- **How it works**: Bot detects media group in original message and processes all MMK receipts
+- **Applies to**: Both single and bulk sell transactions
+
+**Before:**
+- User sends 2 MMK receipts (1M + 1M = 2M)
+- Bot only detects first receipt: 1M
+- Transaction fails: Expected 2M, Detected 1M
+
+**After:**
+- User sends 2 MMK receipts (1M + 1M = 2M)
+- Bot detects both receipts: 1M + 1M = 2M
+- Transaction succeeds!
+
+#### Internal Transfer Now Supports BNB and Crypto Transfers
+- **Fixed**: Bot now correctly detects USD amounts from BNB and other crypto receipts
+- **Example**: BNB receipt showing "9.49 $" + network fee "0.001868 $" = 9.491868 total
+- **Improved**: OCR prompts now handle crypto transfers that display USD equivalent values
+- **Enhanced**: Better error handling when AI cannot extract amounts from receipts
+
+**How it works:**
+- Bot detects if transfer is BNB/ETH/other crypto with USD value
+- Extracts the USD amount shown on receipt
+- Adds network fee (if shown separately in USD)
+- Uses total USD amount for balance update
+
+### ✨ Improvements
+
+#### Coin Transfer Photo Now Optional
+- **Changed**: Photo is now optional for coin transfers in Accounts Matter topic
+- **Benefit**: Faster processing - bot uses amounts from text, not OCR
+- **Format**: `San(binance) to OKM(swift) 10 USDT-0.47 USDT(fee) = 9.53 USDT`
+- **Photo**: Can be attached for reference/proof, but amounts come from text
+
+**Example:**
+```
+San(binance) to OKM(swift) 10 USDT-0.47 USDT(fee) = 9.53 USDT
+```
+Bot will:
+- Reduce 10 USDT from San(binance)
+- Add 9.53 USDT to OKM(swift)
+- No OCR needed!
+
+---
+
+## Version 2.3.2 - Status Messages to Alert Topic
+
+### 🎉 New Features
+
+#### All Transaction Status Messages Sent to Alert Topic
+- **New behavior**: All transaction status messages now sent to alert topic
+- **Messages included**:
+  - ✅ Buy transaction success
+  - ✅ Sell transaction success
+  - ✅ P2P sell transaction success
+  - ✅ Internal transfer success
+  - ❌ All error messages (already working)
+  - ⚠️ All warning messages (already working)
+
+**Message Format:**
+```
+✅ Buy Transaction Processed
+
+Staff: San
+MMK: -2,500,000 (San(KBZ))
+USDT: +100.0000 (ACT(Wallet))
+Photos: 1
+```
+
+**Benefits:**
+- Centralized monitoring in alert topic
+- Easy to track all transactions
+- No need to search through chat history
+- Clear status updates for all operations
+
+### 🔧 Technical Changes
+- Added `send_status_message()` function
+- Updated buy transaction to send success message
+- Updated sell transaction to send success message
+- Updated P2P sell to send success message
+- Updated internal transfer to send success message
+- All messages use HTML formatting for clarity
+
+---
+
+## Version 2.3.1 - Improved USDT Tolerance
+
+### 🔧 Bug Fixes
+
+#### Flexible USDT Tolerance
+- **Fixed**: USDT amount matching now uses flexible tolerance
+- **Old behavior**: Fixed 0.03 USDT tolerance (too strict for large amounts)
+- **New behavior**: 0.5 USDT or 0.5% of amount, whichever is larger
+- **Example**: For 1019 USDT transaction, tolerance is 5.095 USDT (0.5%)
+- **Benefit**: Handles OCR rounding differences for large transactions
+
+**Why This Matters:**
+- OCR may detect `1019.0` instead of `1019.124308`
+- Difference of 0.12 USDT is tiny (0.01%) but was rejected
+- New tolerance allows reasonable OCR variations
+- Still strict enough to catch real errors
+
+**Tolerance Examples:**
+- 10 USDT → 0.5 USDT tolerance (5%)
+- 100 USDT → 0.5 USDT tolerance (0.5%)
+- 1000 USDT → 5.0 USDT tolerance (0.5%)
+- 10000 USDT → 50.0 USDT tolerance (0.5%)
+
+### 📝 Technical Details
+- Updated `process_sell_transaction()` tolerance check
+- Updated `process_sell_transaction_bulk()` tolerance check
+- Formula: `tolerance = max(0.5, amount * 0.005)`
+- Logs now show calculated tolerance for debugging
+
+---
+
+## Version 2.3.0 - User Management Enhancement
+
+### 🎉 New Features
+
+#### `/list_users` Command
+- **New command**: List all user prefix mappings
+- Shows user ID, username, prefix, and creation date
+- Useful for managing staff access and troubleshooting
+- Displays total user count
+- Formatted output with clear information
+
+**Example Output:**
+```
+👥 User Prefix Mappings
+
+1. San
+   User ID: 123456789
+   Username: @san_username
+   Created: 2025-12-21 10:30:00
+
+2. TZT
+   User ID: 987654321
+   Username: @tzt_username
+   Created: 2025-12-21 11:00:00
+
+Total Users: 2
+```
+
+**Use Cases:**
+- View all mapped users at a glance
+- Check user IDs for troubleshooting
+- Verify prefix assignments
+- Audit user access and permissions
+
+### 🔧 Technical Changes
+- Added `get_all_users()` database function
+- Added `list_users_command()` handler
+- Updated `/start` command help text
+- Registered command handler in main application
+
+---
+
 ## Version 2.2.0 - MMK Fee Handling in Buy and Sell Transactions
 
 ### 🎉 New Features

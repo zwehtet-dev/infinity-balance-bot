@@ -76,6 +76,14 @@ Complete testing guide for all Infinity Balance Bot features.
 - [ ] User with prefix "TZT" sends transaction
 - [ ] Verify bot only shows TZT's banks in OCR
 
+### 2.3 List Users Command
+- [ ] Send `/list_users` command
+- [ ] Verify all mapped users are displayed
+- [ ] Check user IDs are shown
+- [ ] Check usernames are shown
+- [ ] Check creation dates are shown
+- [ ] Verify total user count is correct
+
 ---
 
 ## 3. Buy Transaction Testing
