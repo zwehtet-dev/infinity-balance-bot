@@ -270,6 +270,37 @@ pending_transactions = {}
 media_groups = {}
 media_group_locks = {}  # Track which media groups are being processed
 
+# Storage for incoming media groups from sale bot (original messages with multiple photos)
+# Format: {media_group_id: {'photos': [(message_id, photo)], 'text': caption_text, 'timestamp': time}}
+incoming_media_groups = {}
+# Map message_id to media_group_id for quick lookup
+message_to_media_group = {}
+
+# Maximum age for incoming media groups (in seconds) - clean up after 1 hour
+MEDIA_GROUP_MAX_AGE = 3600
+
+def cleanup_old_media_groups():
+    """Remove media groups older than MEDIA_GROUP_MAX_AGE seconds"""
+    import time
+    current_time = time.time()
+    groups_to_remove = []
+    
+    for media_group_id, group_data in incoming_media_groups.items():
+        if current_time - group_data.get('timestamp', 0) > MEDIA_GROUP_MAX_AGE:
+            groups_to_remove.append(media_group_id)
+    
+    for media_group_id in groups_to_remove:
+        # Remove message_id mappings
+        if media_group_id in incoming_media_groups:
+            for photo_data in incoming_media_groups[media_group_id].get('photos', []):
+                msg_id = photo_data.get('message_id')
+                if msg_id and msg_id in message_to_media_group:
+                    del message_to_media_group[msg_id]
+            del incoming_media_groups[media_group_id]
+    
+    if groups_to_remove:
+        logger.info(f"Cleaned up {len(groups_to_remove)} old media groups")
+
 # ============================================================================
 # BALANCE PARSING & FORMATTING
 # ============================================================================
@@ -1033,7 +1064,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         del pending_transactions[original_message_id]
 
 async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict):
-    """SELL: User sells USDT, we receive MMK (supports multiple receipts)"""
+    """SELL: User sells USDT, we receive MMK (supports multiple receipts from media group)"""
     message = update.message
     balances = context.chat_data.get('balances')
     
@@ -1049,26 +1080,62 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
         await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
-    # Get user's MMK receipt
+    # Get user's MMK receipt(s)
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
         await send_alert(message, "❌ Original message has no receipt", context)
         return
     
-    # OCR user's receipt (only once, not accumulated)
-    user_photo = original_message.photo[-1]
-    user_file = await context.bot.get_file(user_photo.file_id)
-    user_bytes = await user_file.download_as_bytearray()
-    user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+    # Check if original message is part of a media group (multiple receipts)
+    original_message_id = original_message.message_id
+    photos_to_process = []
     
-    user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
+    if original_message_id in message_to_media_group:
+        # Original message is part of a media group - get all photos
+        media_group_id = message_to_media_group[original_message_id]
+        if media_group_id in incoming_media_groups:
+            group_data = incoming_media_groups[media_group_id]
+            photos_to_process = [p['photo'] for p in group_data['photos']]
+            logger.info(f"Found {len(photos_to_process)} photos in media group {media_group_id}")
     
-    if not user_result:
-        await send_alert(message, "❌ Could not detect bank/amount from user receipt", context)
+    # If not in media group or no photos found, use single photo
+    if not photos_to_process:
+        photos_to_process = [original_message.photo[-1]]
+        logger.info(f"Processing single photo from original message")
+    
+    # OCR all user's receipts and sum amounts
+    total_detected_mmk = 0
+    detected_bank = None
+    receipt_count = 0
+    
+    for idx, photo in enumerate(photos_to_process, 1):
+        logger.info(f"Processing MMK receipt {idx}/{len(photos_to_process)}")
+        
+        user_file = await context.bot.get_file(photo.file_id)
+        user_bytes = await user_file.download_as_bytearray()
+        user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+        
+        user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
+        
+        if not user_result or not user_result['amount']:
+            logger.warning(f"Could not process MMK receipt {idx}")
+            continue
+        
+        receipt_mmk = user_result['amount']
+        total_detected_mmk += receipt_mmk
+        receipt_count += 1
+        
+        # Store bank from first successful detection
+        if not detected_bank and user_result['bank']:
+            detected_bank = user_result['bank']
+        
+        logger.info(f"MMK receipt {idx}: {receipt_mmk:,.0f} MMK from {user_result['bank']['bank_name'] if user_result['bank'] else 'unknown'}")
+    
+    if receipt_count == 0 or not detected_bank:
+        await send_alert(message, "❌ Could not detect bank/amount from user receipt(s)", context)
         return
     
-    detected_mmk = user_result['amount']
-    detected_bank = user_result['bank']
+    logger.info(f"Total MMK from {receipt_count} receipt(s): {total_detected_mmk:,.0f} MMK")
     
     # Check if staff reply contains fee (format: fee-3039)
     staff_reply_text = message.text or message.caption or ""
@@ -1079,10 +1146,10 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
         logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
     
     # Add fee to detected MMK amount
-    total_mmk = detected_mmk + mmk_fee
+    total_mmk = total_detected_mmk + mmk_fee
     
     if mmk_fee > 0:
-        logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
+        logger.info(f"MMK amount adjusted: {total_detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
     
     # Verify MMK (compare OCR detected amount with message amount)
     if abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
@@ -1092,13 +1159,14 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
             f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
             f"<b>Transaction:</b> Sell\n"
             f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Receipts:</b> {receipt_count}\n"
             f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
             f"<b>Detected (from OCR):</b> {total_mmk:,.0f} MMK\n"
             f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK\n\n"
             f"⚠️ Processing with OCR detected amount: {total_mmk:,.0f} MMK",
             parse_mode='HTML'
         )
-        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
+        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
     
     # Continue processing with OCR detected amount (total_mmk)
     
@@ -1132,6 +1200,8 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
             'amounts': [],
             'mmk_bank': detected_bank,
             'detected_mmk': total_mmk,  # Store total MMK (including fee)
+            'total_detected_mmk': total_detected_mmk,  # Store sum of all MMK receipts (before fee)
+            'receipt_count': receipt_count,  # Store number of MMK receipts
             'expected_usdt': tx_info['usdt'],
             'type': 'sell',
             'user_prefix': user_prefix,
@@ -1155,12 +1225,16 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     # Process the transaction with detected amount
     # await message.reply_text(f"✅ Total amount matched!\n{photo_count} photo(s): {total_detected_usdt:.4f} USDT\n\nProcessing...")
     
+    # Retrieve stored values from pending transaction
+    receipt_count = pending_transactions[original_message_id].get('receipt_count', 1)
+    total_detected_mmk = pending_transactions[original_message_id].get('total_detected_mmk', total_mmk - mmk_fee)
+    
     # Update balances for the specific staff member's bank (use total_mmk including fee)
     for bank in balances['mmk_banks']:
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank['amount'] += total_mmk
             if mmk_fee > 0:
-                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
+                logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']} (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})")
             else:
                 logger.info(f"Added {total_mmk:,.0f} MMK to {bank['bank_name']}")
             break
@@ -1222,7 +1296,9 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     # Send success message to alert topic
     mmk_display = f"{total_mmk:,.0f}"
     if mmk_fee > 0:
-        mmk_display += f" (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+        mmk_display += f" (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    elif receipt_count > 1:
+        mmk_display += f" ({receipt_count} receipts)"
     
     usdt_bank_display = expected_bank_name if usdt_updated else f"{expected_bank_name} (NOT FOUND)"
     
@@ -1233,7 +1309,8 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
         f"<b>MMK:</b> +{mmk_display} ({detected_bank['bank_name']})\n"
         f"<b>USDT:</b> -{total_detected_usdt:.4f} ({usdt_bank_display})\n"
         f"<b>Bank Type:</b> {stored_bank_type}\n"
-        f"<b>Photos:</b> {photo_count}",
+        f"<b>MMK Receipts:</b> {receipt_count}\n"
+        f"<b>USDT Photos:</b> {photo_count}",
         parse_mode='HTML'
     )
     
@@ -1856,26 +1933,62 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
         await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
         return
     
-    # Get user's MMK receipt
+    # Get user's MMK receipt(s)
     original_message = message.reply_to_message
     if not original_message or not original_message.photo:
         await send_alert(message, "❌ Original message has no receipt", context)
         return
     
-    # OCR user's receipt
-    user_photo = original_message.photo[-1]
-    user_file = await context.bot.get_file(user_photo.file_id)
-    user_bytes = await user_file.download_as_bytearray()
-    user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+    # Check if original message is part of a media group (multiple receipts)
+    original_message_id = original_message.message_id
+    mmk_photos_to_process = []
     
-    user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
+    if original_message_id in message_to_media_group:
+        # Original message is part of a media group - get all photos
+        media_group_id = message_to_media_group[original_message_id]
+        if media_group_id in incoming_media_groups:
+            group_data = incoming_media_groups[media_group_id]
+            mmk_photos_to_process = [p['photo'] for p in group_data['photos']]
+            logger.info(f"Found {len(mmk_photos_to_process)} MMK photos in media group {media_group_id}")
     
-    if not user_result:
-        await send_alert(message, "❌ Could not detect bank/amount from user receipt", context)
+    # If not in media group or no photos found, use single photo
+    if not mmk_photos_to_process:
+        mmk_photos_to_process = [original_message.photo[-1]]
+        logger.info(f"Processing single MMK photo from original message")
+    
+    # OCR all user's MMK receipts and sum amounts
+    total_detected_mmk = 0
+    detected_bank = None
+    mmk_receipt_count = 0
+    
+    for idx, photo in enumerate(mmk_photos_to_process, 1):
+        logger.info(f"Processing MMK receipt {idx}/{len(mmk_photos_to_process)}")
+        
+        user_file = await context.bot.get_file(photo.file_id)
+        user_bytes = await user_file.download_as_bytearray()
+        user_base64 = base64.b64encode(user_bytes).decode('utf-8')
+        
+        user_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
+        
+        if not user_result or not user_result['amount']:
+            logger.warning(f"Could not process MMK receipt {idx}")
+            continue
+        
+        receipt_mmk = user_result['amount']
+        total_detected_mmk += receipt_mmk
+        mmk_receipt_count += 1
+        
+        # Store bank from first successful detection
+        if not detected_bank and user_result['bank']:
+            detected_bank = user_result['bank']
+        
+        logger.info(f"MMK receipt {idx}: {receipt_mmk:,.0f} MMK from {user_result['bank']['bank_name'] if user_result['bank'] else 'unknown'}")
+    
+    if mmk_receipt_count == 0 or not detected_bank:
+        await send_alert(message, "❌ Could not detect bank/amount from user receipt(s)", context)
         return
     
-    detected_mmk = user_result['amount']
-    detected_bank = user_result['bank']
+    logger.info(f"Total MMK from {mmk_receipt_count} receipt(s): {total_detected_mmk:,.0f} MMK")
     
     # Check if staff reply contains fee (format: fee-3039)
     staff_reply_text = message.text or message.caption or ""
@@ -1886,10 +1999,10 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
         logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
     
     # Add fee to detected MMK amount
-    total_mmk = detected_mmk + mmk_fee
+    total_mmk = total_detected_mmk + mmk_fee
     
     if mmk_fee > 0:
-        logger.info(f"MMK amount adjusted: {detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
+        logger.info(f"MMK amount adjusted: {total_detected_mmk:,.0f} + {mmk_fee:,.0f} (fee) = {total_mmk:,.0f}")
     
     # Verify MMK (compare OCR detected amount with message amount)
     if abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.5):
@@ -1899,13 +2012,14 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
             f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
             f"<b>Transaction:</b> Sell (Bulk)\n"
             f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>MMK Receipts:</b> {mmk_receipt_count}\n"
             f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
             f"<b>Detected (from OCR):</b> {total_mmk:,.0f} MMK\n"
             f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK\n\n"
             f"⚠️ Processing with OCR detected amount: {total_mmk:,.0f} MMK",
             parse_mode='HTML'
         )
-        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
+        logger.warning(f"MMK mismatch! Expected: {tx_info['mmk']:,.0f}, Detected: {total_mmk:,.0f} (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f}) - Processing with detected amount")
     
     # Continue processing with OCR detected amount (total_mmk)
     
@@ -2022,7 +2136,9 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     # Send success message to alert topic
     mmk_display = f"{total_mmk:,.0f}"
     if mmk_fee > 0:
-        mmk_display += f" (Receipt: {detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+        mmk_display += f" (Receipts: {total_detected_mmk:,.0f} + Fee: {mmk_fee:,.0f})"
+    elif mmk_receipt_count > 1:
+        mmk_display += f" ({mmk_receipt_count} receipts)"
     
     usdt_bank_display = expected_bank_name if usdt_updated else f"{expected_bank_name} (NOT FOUND)"
     
@@ -2033,7 +2149,8 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
         f"<b>MMK:</b> +{mmk_display} ({detected_bank['bank_name']})\n"
         f"<b>USDT:</b> -{total_detected_usdt:.4f} ({usdt_bank_display})\n"
         f"<b>Bank Type:</b> {detected_bank_type}\n"
-        f"<b>Photos:</b> {len(photos)} USDT receipts",
+        f"<b>MMK Receipts:</b> {mmk_receipt_count}\n"
+        f"<b>USDT Photos:</b> {len(photos)}",
         parse_mode='HTML'
     )
 
@@ -2299,6 +2416,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = (message.text or message.caption or "")[:50]
     
     logger.info(f"   Has photo: {has_photo}, Is reply: {is_reply}, Text: '{message_text}...'")
+    
+    # Store incoming media groups from sale bot (photos with transaction info)
+    # This allows us to process multiple receipts when staff replies
+    if has_photo and message.media_group_id and not is_reply:
+        import time
+        media_group_id = message.media_group_id
+        caption = message.text or message.caption or ""
+        
+        # Cleanup old media groups periodically
+        cleanup_old_media_groups()
+        
+        # Initialize media group storage if not exists
+        if media_group_id not in incoming_media_groups:
+            incoming_media_groups[media_group_id] = {
+                'photos': [],
+                'text': caption if caption else None,
+                'timestamp': time.time()
+            }
+            logger.info(f"   📦 Created incoming media group storage: {media_group_id}")
+        
+        # Store caption from any message that has it
+        if caption and not incoming_media_groups[media_group_id]['text']:
+            incoming_media_groups[media_group_id]['text'] = caption
+        
+        # Add this photo to the group
+        incoming_media_groups[media_group_id]['photos'].append({
+            'message_id': message.message_id,
+            'photo': message.photo[-1]
+        })
+        
+        # Map message_id to media_group_id for quick lookup
+        message_to_media_group[message.message_id] = media_group_id
+        
+        photo_count = len(incoming_media_groups[media_group_id]['photos'])
+        logger.info(f"   ➕ Added photo to incoming media group {media_group_id}. Total: {photo_count}")
     
     # Check if this is a P2P sell (photo with "fee" in message text)
     # P2P sell can be either direct post OR a reply, but must have "fee" in the message
