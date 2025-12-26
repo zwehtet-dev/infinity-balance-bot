@@ -910,13 +910,13 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank_found = True
             if bank['amount'] < total_detected_mmk:
-                # await message.reply_text(
-                #     f"❌ Insufficient balance!\n\n"
-                #     f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
-                #     f"Required: {total_detected_mmk:,.0f} MMK\n"
-                #     f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK"
-                # )
                 logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_detected_mmk:,.0f} MMK, Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK")
+                await send_alert(message, 
+                    f"❌ Insufficient MMK balance!\n\n"
+                    f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
+                    f"Required: {total_detected_mmk:,.0f} MMK\n"
+                    f"Shortage: {total_detected_mmk - bank['amount']:,.0f} MMK", 
+                    context)
                 # Clean up pending transaction
                 if original_message_id in pending_transactions:
                     del pending_transactions[original_message_id]
@@ -1336,6 +1336,21 @@ async def process_coin_transfer(update: Update, context: ContextTypes.DEFAULT_TY
         
         context.chat_data['balances'] = balances
         
+        # Send success message to alert topic
+        await send_status_message(
+            context,
+            f"✅ <b>Coin Transfer Processed</b>\n\n"
+            f"<b>From:</b> {from_full_name}\n"
+            f"<b>To:</b> {to_full_name}\n"
+            f"<b>Sent:</b> {sent_amount:.4f} USDT\n"
+            f"<b>Fee:</b> {fee_amount:.4f} USDT\n"
+            f"<b>Received:</b> {received_amount:.4f} USDT\n\n"
+            f"<b>New Balances:</b>\n"
+            f"{from_full_name}: {from_bank_obj['amount']:.4f} USDT\n"
+            f"{to_full_name}: {to_bank_obj['amount']:.4f} USDT",
+            parse_mode='HTML'
+        )
+        
         logger.info(f"✅ Coin transfer complete: {from_full_name} ({from_bank_obj['amount']:.4f}) -> {to_full_name} ({to_bank_obj['amount']:.4f})")
         return True
     
@@ -1504,12 +1519,13 @@ Note: Return the amount as a positive number, ignore any minus signs."""
     
     # Check if sufficient balance
     if from_bank_obj['amount'] < amount:
-        # await message.reply_text(
-        #     f"⚠️ Insufficient balance!\n"
-        #     f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
-        #     f"Transfer: {amount:,.2f}"
-        # )
         logger.error(f"Insufficient balance! {from_full_name}: {from_bank_obj['amount']:,.2f}, Transfer: {amount:,.2f}")
+        await send_alert(message, 
+            f"❌ Insufficient balance for transfer!\n\n"
+            f"{from_full_name}: {from_bank_obj['amount']:,.2f}\n"
+            f"Required: {amount:,.2f}\n"
+            f"Shortage: {amount - from_bank_obj['amount']:,.2f}", 
+            context)
         return
     
     # Process transfer
@@ -1711,13 +1727,13 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         if banks_match(bank['bank_name'], detected_bank['bank_name']):
             bank_found = True
             if bank['amount'] < total_mmk:
-                # await message.reply_text(
-                #     f"❌ Insufficient balance!\n\n"
-                #     f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
-                #     f"Required: {total_mmk:,.0f} MMK\n"
-                #     f"Shortage: {total_mmk - bank['amount']:,.0f} MMK"
-                # )
                 logger.error(f"Insufficient balance! {bank['bank_name']}: {bank['amount']:,.0f} MMK, Required: {total_mmk:,.0f} MMK, Shortage: {total_mmk - bank['amount']:,.0f} MMK")
+                await send_alert(message, 
+                    f"❌ Insufficient MMK balance!\n\n"
+                    f"{bank['bank_name']}: {bank['amount']:,.0f} MMK\n"
+                    f"Required: {total_mmk:,.0f} MMK\n"
+                    f"Shortage: {total_mmk - bank['amount']:,.0f} MMK", 
+                    context)
                 return
             bank['amount'] -= total_mmk
             if mmk_fee > 0:
@@ -1924,18 +1940,24 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     logger.info(f"Bulk USDT processing complete: Total {total_detected_usdt:.4f} USDT from {len(photos)} photos, bank type: {detected_bank_type}")
     
-    # Check if total USDT amount matches (allow 0.03 tolerance)
-    if abs(total_detected_usdt - tx_info['usdt']) > 0.03:
-        # await message.reply_text(
-        #     f"⚠️ USDT amount mismatch!\n"
-        #     f"Expected: {tx_info['usdt']:.4f} USDT\n"
-        #     f"Detected: {total_detected_usdt:.4f} USDT (from {len(photos)} photos)"
-        # )
-        logger.error(f"USDT amount mismatch! Expected: {tx_info['usdt']:.4f} USDT, Detected: {total_detected_usdt:.4f} USDT (from {len(photos)} photos)")
-        return
+    # Check if total USDT amount matches (allow 0.5 USDT or 0.5% tolerance)
+    tolerance = max(0.5, tx_info['usdt'] * 0.005)
+    if abs(total_detected_usdt - tx_info['usdt']) > tolerance:
+        # Send warning to alert topic but continue processing
+        await send_status_message(
+            context,
+            f"⚠️ <b>USDT Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> Sell (Bulk)\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['usdt']:.4f} USDT\n"
+            f"<b>Detected (from OCR):</b> {total_detected_usdt:.4f} USDT\n"
+            f"<b>Difference:</b> {abs(total_detected_usdt - tx_info['usdt']):.4f} USDT\n\n"
+            f"⚠️ Processing with OCR detected amount: {total_detected_usdt:.4f} USDT",
+            parse_mode='HTML'
+        )
+        logger.warning(f"USDT amount mismatch: Expected {tx_info['usdt']:.4f}, Detected {total_detected_usdt:.4f} - Processing with detected amount")
     
-    # Amount matches! Process the transaction
-    # await message.reply_text(f"✅ Total amount matched!\n{len(photos)} photos: {total_detected_usdt:.4f} USDT\n\nProcessing...")
+    # Process the transaction with detected amount
     
     # Update balances for the specific staff member's bank (use total_mmk including fee)
     for bank in balances['mmk_banks']:

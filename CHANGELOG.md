@@ -1,5 +1,61 @@
 # Changelog
 
+## Version 2.3.9 - Complete Alert Notifications
+
+### 🐛 Bug Fixes
+
+#### Added Missing Alert Notifications for All Error Cases
+- **Fixed**: All error messages now send notifications to alert topic
+- **Added alerts for**:
+  - Insufficient MMK balance in buy transactions
+  - Insufficient balance in internal transfers
+  - Insufficient MMK balance in bulk buy transactions
+  - USDT amount mismatch in bulk sell transactions (now warns but continues)
+
+#### Changed Bulk Sell USDT Mismatch Behavior
+- **Before**: Transaction would fail and stop if USDT amounts didn't match
+- **After**: Sends warning to alert topic but continues processing with OCR detected amount
+- **Tolerance**: Uses flexible tolerance (0.5 USDT or 0.5% of amount)
+
+**All notifications now sent to alert topic:**
+- ✅ Success messages (Buy, Sell, P2P Sell, Internal Transfer, Coin Transfer)
+- ⚠️ Warning messages (Amount mismatches, Invalid amounts)
+- ❌ Error messages (Insufficient balance, Bank not found, OCR failures)
+
+## Version 2.3.8 - Coin Transfer Notifications
+
+### 🐛 Bug Fixes
+
+#### Added Missing Success Notification for Coin Transfers
+- **Fixed**: Coin transfers now send success notifications to alert topic
+- **Shows**: Source account, destination account, sent amount, fee, received amount, and new balances
+- **Format**: HTML formatted message with clear breakdown
+
+**What was missing:**
+- Coin transfers were processing correctly
+- Balance was updating correctly
+- But no notification was sent to alert topic
+
+**What's fixed:**
+- Success message now sent to alert topic after every coin transfer
+- Shows complete transfer details including fee breakdown
+- Includes new balances for both accounts
+
+**Example notification:**
+```
+✅ Coin Transfer Processed
+
+From: San(Binance)
+To: San(Swift)
+Sent: 9.4919 USDT
+Fee: 0.0019 USDT
+Received: 9.4900 USDT
+
+New Balances:
+San(Binance): 254.8162 USDT
+San(Swift): 2586.8862 USDT
+```
+
 ## Version 2.3.7 - Internal Transfer Notifications
 
 ### 🐛 Bug Fixes
