@@ -821,32 +821,65 @@ async def ocr_extract_usdt_amount(image_base64):
     return None
 
 async def ocr_extract_usdt_with_fee(image_base64):
-    """Extract USDT amount, network fee, and bank type from receipt
+    """Extract USDT amount, network fee, and bank type from STAFF receipt (for SELL transactions)
+    
+    This is used when STAFF sends USDT to customer. We need to know the TOTAL amount
+    to deduct from our balance (amount sent + network fee).
     
     Returns:
         {
-            'amount': <transaction amount>,
+            'amount': <transaction amount displayed>,
             'network_fee': <network fee>,
-            'total_amount': <final amount to use for balance>,
+            'total_amount': <total to deduct from our balance = amount + fee>,
             'bank_type': 'swift', 'wallet', or 'binance'
         }
     """
     try:
-        prompt = """Analyze this USDT transfer receipt carefully.
+        prompt = """Analyze this USDT transfer receipt from STAFF sending USDT to customer.
 
-TASK:
-1. Identify the receipt type:
-   - Binance: Shows "Withdrawal Details" title, dark theme, shows network fee separately at bottom
-   - Swift: Shows "USDT Sent" title, dark theme, network fee in BNB
-   - Wallet: Shows different interface (Trust Wallet, MetaMask, etc.)
+TASK: Extract the TOTAL USDT amount that was SPENT (amount sent + network fee).
 
-2. Extract the main transaction amount (the USDT sent/withdrawn, as positive number)
+We need to know how much to DEDUCT from our balance when staff sends USDT.
 
-3. Extract the network fee (if shown separately)
+RECEIPT STRUCTURE (Chinese Binance/Exchange):
+- Main display: "-147.368 USDT" ← Amount customer receives
+- 金额 (Amount): 148.368 USDT ← TOTAL we spent (this is what we need!)
+- 网络手续费 (Network fee): 1 USDT
 
-4. Calculate total_amount based on receipt type:
-   - Binance: Use the displayed amount AS-IS (Binance already includes fee in the amount)
-   - Swift/Wallet: total = amount + network_fee (need to add fee manually)
+For SELL transactions, we need the TOTAL spent:
+- total_amount = main_displayed_amount + network_fee
+- OR total_amount = 金额 (Amount) field directly
+
+EXAMPLES:
+
+1. Binance Withdrawal Receipt:
+   - Main display: "-147.368 USDT" (customer receives)
+   - 金额: 148.368 USDT (total we spent)
+   - 网络手续费: 1 USDT
+   Return: {"amount": 147.368, "network_fee": 1, "total_amount": 148.368, "bank_type": "binance"}
+
+2. Swift Receipt:
+   - Shows: "-24.813896 USDT" sent
+   - Network fee: 0.12 USDT
+   Return: {"amount": 24.813896, "network_fee": 0.12, "total_amount": 24.933896, "bank_type": "swift"}
+
+3. Wallet Receipt:
+   - Shows: "25.5 USDT" with no network fee
+   Return: {"amount": 25.5, "network_fee": 0, "total_amount": 25.5, "bank_type": "wallet"}
+
+RETURN EXACT JSON FORMAT:
+{
+    "amount": <the displayed/sent amount as positive number>,
+    "network_fee": <network fee if shown, 0 if not>,
+    "total_amount": <amount + network_fee = total to deduct from balance>,
+    "bank_type": "binance" or "swift" or "wallet"
+}
+
+CRITICAL RULES:
+- total_amount = amount + network_fee (ALWAYS add fee for all types)
+- This is for SELL: we need TOTAL spent, not what customer receives
+- Always return amounts as positive numbers
+- bank_type must be "binance", "swift", or "wallet" (lowercase)"""
 
 RETURN EXACT JSON FORMAT:
 {
@@ -971,39 +1004,49 @@ async def ocr_extract_usdt_received(image_base64):
         }
     """
     try:
-        prompt = """Analyze this USDT transfer/withdrawal receipt.
+        prompt = """Analyze this USDT transfer/withdrawal receipt from customer.
 
-TASK: Extract the USDT amount that will be RECEIVED (not the total sent).
+TASK: Extract the USDT amount that WE WILL RECEIVE (the final amount after network fee is deducted).
 
-IMPORTANT:
-- Look for the main transaction amount (提币数量/币种, Amount, Withdrawal Amount)
-- This is the amount RECEIVED, NOT including network fee
-- Network fee (手续费) is separate and paid by sender
+CRITICAL - READ THE MAIN DISPLAYED AMOUNT:
+- Look for the LARGE displayed amount at the top (e.g., "-147.368 USDT")
+- This is the ACTUAL amount we receive after network fee is deducted
+- DO NOT use the "金额" (Amount) field which shows amount BEFORE fee deduction
+- The network fee is already subtracted from the main displayed amount
+
+RECEIPT STRUCTURE (Chinese Binance/Exchange):
+- Main display: "-147.368 USDT" ← THIS IS WHAT WE RECEIVE (use this!)
+- 金额 (Amount): 148.368 USDT ← This is before fee, DO NOT use this
+- 网络手续费 (Network fee): 1 USDT ← Fee already deducted from main amount
+
+CALCULATION:
+- Main displayed amount = 金额 - 网络手续费
+- Example: 147.368 = 148.368 - 1
 
 EXAMPLES:
-1. Chinese Binance receipt shows:
-   - 提币数量/币种: 1415 USDT (this is what we receive)
-   - 手续费: 2 USDT (network fee, ignore this)
-   → Return received_amount: 1415
+1. Receipt shows:
+   - Main display: "-147.368 USDT"
+   - 金额: 148.368 USDT
+   - 网络手续费: 1 USDT
+   → Return received_amount: 147.368 (the main displayed amount)
 
-2. English receipt shows:
-   - Amount: 100 USDT
-   - Network Fee: 1 USDT
-   → Return received_amount: 100
-
-3. Swift/Wallet receipt shows:
-   - Sent: 50.5 USDT
-   - Fee: 0.5 USDT
-   → Return received_amount: 50.5
+2. Receipt shows:
+   - Main display: "-1415 USDT"
+   - 提币数量: 1417 USDT
+   - 手续费: 2 USDT
+   → Return received_amount: 1415 (the main displayed amount)
 
 RETURN JSON FORMAT:
 {
-    "received_amount": <amount that will be received, NOT including fee>,
+    "received_amount": <the MAIN DISPLAYED amount, which is amount AFTER fee deduction>,
     "network_fee": <network fee if shown, 0 if not>,
     "bank_type": "binance" or "swift" or "wallet"
 }
 
-CRITICAL: received_amount should be the amount BEFORE fee is added, the actual amount received."""
+CRITICAL: 
+- received_amount = the large displayed amount (e.g., -147.368)
+- This is the FINAL amount we receive, NOT the amount before fee
+- Always return as positive number (ignore minus sign)"""
 
         response = client.chat.completions.create(
             model="gpt-4o",
