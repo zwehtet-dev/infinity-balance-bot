@@ -881,36 +881,6 @@ CRITICAL RULES:
 - Always return amounts as positive numbers
 - bank_type must be "binance", "swift", or "wallet" (lowercase)"""
 
-RETURN EXACT JSON FORMAT:
-{
-    "amount": <transaction amount as positive number>,
-    "network_fee": <network fee if shown, 0 if not>,
-    "total_amount": <final amount to use>,
-    "bank_type": "binance" or "swift" or "wallet"
-}
-
-EXAMPLES:
-
-1. Binance Withdrawal Receipt:
-   Shows: "-47.84175 USDT" and "Network fee: 0.01 USDT"
-   Return: {"amount": 47.84175, "network_fee": 0.01, "total_amount": 47.84175, "bank_type": "binance"}
-   Note: total_amount = amount (Binance already includes fee in displayed amount)
-
-2. Swift Receipt:
-   Shows: "-24.813896 USDT" and "Network fee (0.12 $)"
-   Return: {"amount": 24.813896, "network_fee": 0.12, "total_amount": 24.933896, "bank_type": "swift"}
-   Note: total_amount = amount + network_fee (need to add fee)
-
-3. Wallet Receipt:
-   Shows: "25.5 USDT" with no network fee
-   Return: {"amount": 25.5, "network_fee": 0, "total_amount": 25.5, "bank_type": "wallet"}
-
-CRITICAL RULES:
-- For Binance: total_amount = amount (DO NOT add network_fee, it's already included)
-- For Swift/Wallet: total_amount = amount + network_fee (need to add it)
-- Always return amounts as positive numbers
-- bank_type must be "binance", "swift", or "wallet" (lowercase)"""
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{
@@ -957,17 +927,13 @@ CRITICAL RULES:
         if bank_type not in ['swift', 'wallet', 'binance']:
             bank_type = 'wallet'
         
-        # Calculate total_amount based on bank type
-        if bank_type == 'binance':
-            # Binance already includes fee in the displayed amount
-            total_amount = amount
-        else:
-            # Swift/Wallet need to add network fee
-            total_amount = amount + network_fee
+        # Calculate total_amount: ALWAYS add network fee for SELL transactions
+        # This is the total we need to deduct from our balance
+        total_amount = amount + network_fee
         
-        # Override with provided total_amount if it makes sense
-        provided_total = abs(float(data.get('total_amount', total_amount)))
-        if provided_total > 0:
+        # Override with provided total_amount if it makes sense (and is larger)
+        provided_total = abs(float(data.get('total_amount', 0)))
+        if provided_total >= total_amount:
             total_amount = provided_total
         
         result_data = {
