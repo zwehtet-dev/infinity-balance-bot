@@ -83,4 +83,33 @@ CSTZ = San
 
 USD margin for 0.03
 
+please update bot flow, 
+currently, other sale bot send sale message, check it p2p sell , or not skip,
+when staff reply , check 
+1. sale receipt ( check with open ai)
+2. staff receipt ( check with open ai)
+3. update balance  
+
+I want to update this flow, because , current flow is take time in staff reply check ( have to check receipts 2 time ) 
+and can't handle multiple sale receipts
+
+Now, I will update like that,
+when sale message send, bot must be check ocr, detect amount and bank (if buy, not need (due to usdt receiving account is one), if sell, have to detect mmk bank), 
+if detect amount mismatch with sale message, send warning
+and then store to database, eg , 
+```
+id      message_id          detect_amount       detect_bank
+1       112121323           1000000             Kpay p
+```
+and then send noti info to alert topic
+in this , bot must be support multiple receipt
+
+and then when staff reply sale message, bot not need to check again sale receipts
+fetch data from database for sale receipt check
+and then check staff reply receipt  ( bot must be support multiple receipt)
+if mismatch, send warning
+update balance
+send balance message to auto balance
+send success noti to auto alert
+
 
