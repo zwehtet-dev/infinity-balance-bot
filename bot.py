@@ -1219,12 +1219,16 @@ def extract_transaction_info(text):
     """Extract Buy/Sell, USDT amount, MMK amount from message
     
     Also detects P2P Sell format: sell 13000000/3222.6=4034.00981 fee-6.44
+    Also detects P2P Sell with bank breakdown (no OCR needed):
+        Sell 19,149,270/4815.19=3976.84fee-0.78
+        2,042,960 to San (Wave)
+        17,106,310 to San (Kpay P)
     """
     # Check for P2P sell format (contains 'fee-' in the message)
     if 'fee-' in text.lower() or 'fee -' in text.lower():
         # P2P Sell format: sell 13000000/3222.6=4034.00981 fee-6.44
         # Pattern: sell MMK/USDT=RATE fee-FEE
-        p2p_pattern = r'sell\s+([\d,]+(?:\.\d+)?)\s*/\s*([\d.]+)\s*=\s*([\d.]+)\s+fee\s*-?\s*([\d.]+)'
+        p2p_pattern = r'sell\s+([\d,]+(?:\.\d+)?)\s*/\s*([\d.]+)\s*=\s*([\d.]+)\s*fee\s*-?\s*([\d.]+)'
         match = re.search(p2p_pattern, text, re.IGNORECASE)
         
         if match:
@@ -1233,13 +1237,32 @@ def extract_transaction_info(text):
             rate = float(match.group(3))
             fee = float(match.group(4))
             
+            # Check for bank breakdown in the message (e.g., "2,042,960 to San (Wave)")
+            # Pattern: AMOUNT to PREFIX (BANK)
+            bank_breakdown_pattern = r'([\d,]+(?:\.\d+)?)\s+to\s+([A-Za-z\s]+)\s*\(([^)]+)\)'
+            bank_matches = re.findall(bank_breakdown_pattern, text, re.IGNORECASE)
+            
+            bank_breakdown = []
+            if bank_matches:
+                for amount_str, prefix, bank in bank_matches:
+                    amount = float(amount_str.replace(',', ''))
+                    full_name = f"{prefix.strip()}({bank.strip()})"
+                    bank_breakdown.append({
+                        'amount': amount,
+                        'prefix': prefix.strip(),
+                        'bank': bank.strip(),
+                        'bank_name': full_name
+                    })
+                logger.info(f"P2P Sell with bank breakdown: {bank_breakdown}")
+            
             return {
                 'type': 'p2p_sell',
                 'mmk': mmk_amount,
                 'usdt': usdt_amount,
                 'rate': rate,
                 'fee': fee,
-                'total_usdt': usdt_amount + fee
+                'total_usdt': usdt_amount + fee,
+                'bank_breakdown': bank_breakdown if bank_breakdown else None
             }
     
     # Regular Buy/Sell format
@@ -3099,6 +3122,156 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
         )
 
 
+async def process_p2p_sell_with_breakdown(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict):
+    """P2P SELL with bank breakdown specified in message (no OCR needed)
+    
+    Format:
+        Sell 19,149,270/4815.19=3976.84fee-0.78
+        2,042,960 to San (Wave)
+        17,106,310 to San (Kpay P)
+    
+    Process:
+    1. Parse bank breakdown from message
+    2. Add MMK to specified banks directly (no OCR)
+    3. Reduce USDT from staff's Binance account (USDT + fee)
+    """
+    message = update.message
+    balances = context.chat_data.get('balances')
+    
+    if not balances:
+        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
+        return
+    
+    # Get staff prefix - REQUIRED for P2P sell
+    user_id = message.from_user.id
+    user_prefix = get_user_prefix(user_id)
+    
+    if not user_prefix:
+        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
+        return
+    
+    bank_breakdown = tx_info.get('bank_breakdown', [])
+    if not bank_breakdown:
+        await send_alert(message, "❌ No bank breakdown found in message", context)
+        return
+    
+    # Add MMK to specified banks
+    banks_updated = []
+    total_mmk = 0
+    
+    for breakdown in bank_breakdown:
+        amount = breakdown['amount']
+        bank_name = breakdown['bank_name']
+        total_mmk += amount
+        
+        # Find matching bank in balances
+        bank_found = False
+        for bank in balances['mmk_banks']:
+            if banks_match(bank['bank_name'], bank_name):
+                bank['amount'] += amount
+                banks_updated.append((bank['bank_name'], amount))
+                logger.info(f"P2P Sell (breakdown): Added {amount:,.0f} MMK to {bank['bank_name']}")
+                bank_found = True
+                break
+        
+        if not bank_found:
+            await send_alert(message, f"❌ Bank not found: {bank_name}", context)
+            return
+    
+    # Verify total MMK matches message
+    if abs(total_mmk - tx_info['mmk']) > 1000:
+        await send_status_message(
+            context,
+            f"⚠️ <b>MMK Amount Mismatch Warning</b>\n\n"
+            f"<b>Transaction:</b> P2P Sell\n"
+            f"<b>Staff:</b> {user_prefix}\n"
+            f"<b>Expected (from message):</b> {tx_info['mmk']:,.0f} MMK\n"
+            f"<b>Total from breakdown:</b> {total_mmk:,.0f} MMK\n"
+            f"<b>Difference:</b> {abs(total_mmk - tx_info['mmk']):,.0f} MMK",
+            parse_mode='HTML'
+        )
+    
+    # Reduce USDT from staff's Binance account (USDT + fee)
+    total_usdt = tx_info['total_usdt']
+    usdt_updated = False
+    usdt_bank_name = None
+    
+    # First, try to find staff's Binance account specifically
+    for bank in balances['usdt_banks']:
+        if bank.get('prefix') == user_prefix and 'binance' in bank.get('bank', '').lower():
+            if bank['amount'] < total_usdt:
+                await send_alert(message,
+                    f"❌ Insufficient USDT balance!\n\n"
+                    f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                    f"Required: {total_usdt:.4f} USDT (USDT: {tx_info['usdt']:.4f} + Fee: {tx_info['fee']:.4f})\n"
+                    f"Shortage: {total_usdt - bank['amount']:.4f} USDT",
+                    context)
+                return
+            bank['amount'] -= total_usdt
+            usdt_updated = True
+            usdt_bank_name = bank['bank_name']
+            logger.info(f"P2P Sell (breakdown): Reduced {total_usdt:.4f} USDT from {bank['bank_name']} (Binance)")
+            break
+    
+    # Fallback: if no Binance account found for staff, use any USDT bank with matching prefix
+    if not usdt_updated:
+        for bank in balances['usdt_banks']:
+            if bank.get('prefix') == user_prefix:
+                if bank['amount'] < total_usdt:
+                    await send_alert(message,
+                        f"❌ Insufficient USDT balance!\n\n"
+                        f"{bank['bank_name']}: {bank['amount']:.4f} USDT\n"
+                        f"Required: {total_usdt:.4f} USDT (USDT: {tx_info['usdt']:.4f} + Fee: {tx_info['fee']:.4f})\n"
+                        f"Shortage: {total_usdt - bank['amount']:.4f} USDT",
+                        context)
+                    return
+                bank['amount'] -= total_usdt
+                usdt_updated = True
+                usdt_bank_name = bank['bank_name']
+                logger.info(f"P2P Sell (breakdown): Reduced {total_usdt:.4f} USDT from {bank['bank_name']} (fallback)")
+                break
+    
+    if not usdt_updated:
+        await send_alert(message, f"❌ No USDT bank found for prefix '{user_prefix}'. For P2P sell, Binance account is preferred.", context)
+        return
+    
+    # Send new balance
+    new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
+    
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
+    
+    context.chat_data['balances'] = balances
+    
+    # Build MMK summary for multiple banks
+    if len(banks_updated) == 1:
+        mmk_summary = f"+{total_mmk:,.0f} ({banks_updated[0][0]})"
+    else:
+        mmk_details = ", ".join([f"+{amt:,.0f} ({name})" for name, amt in banks_updated])
+        mmk_summary = f"+{total_mmk:,.0f} total ({mmk_details})"
+    
+    # Send success message
+    await send_status_message(
+        context,
+        f"✅ <b>P2P Sell Transaction Processed (Bank Breakdown)</b>\n\n"
+        f"<b>Staff:</b> {user_prefix}\n"
+        f"<b>MMK:</b> {mmk_summary}\n"
+        f"<b>USDT:</b> -{total_usdt:.4f} ({usdt_bank_name})\n"
+        f"<b>Fee:</b> {tx_info['fee']:.4f} USDT\n"
+        f"<b>Rate:</b> {tx_info['rate']:.5f}",
+        parse_mode='HTML'
+    )
+
+
 async def process_p2p_sell_with_photos(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict, photos: list):
     """P2P SELL with photos already collected in memory
     
@@ -4021,13 +4194,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if this is a P2P sell (photo with "fee" in message text)
     # P2P sell can be either direct post OR a reply, but must have "fee" in the message
     # For media groups, we need to wait for all photos before processing
-    if has_photo:
-        current_message_text = message.text or message.caption or ""
-        if 'fee' in current_message_text.lower():
-            logger.info(f"   🔍 Detected P2P sell format (fee in message)")
-            tx_info = extract_transaction_info(current_message_text)
+    # If bank breakdown is specified in message, no photos/OCR needed
+    current_message_text = message.text or message.caption or ""
+    if 'fee' in current_message_text.lower():
+        logger.info(f"   🔍 Detected P2P sell format (fee in message)")
+        tx_info = extract_transaction_info(current_message_text)
+        
+        if tx_info.get('type') == 'p2p_sell':
+            # Check if bank breakdown is provided (no OCR needed)
+            if tx_info.get('bank_breakdown'):
+                logger.info(f"   📋 P2P Sell with bank breakdown - no OCR needed")
+                logger.info(f"   🔄 Processing P2P SELL transaction: {tx_info['usdt']} USDT + {tx_info['fee']} fee = {tx_info['mmk']:,.0f} MMK")
+                await process_p2p_sell_with_breakdown(update, context, tx_info)
+                return
             
-            if tx_info.get('type') == 'p2p_sell':
+            # No bank breakdown - need photos for OCR
+            if has_photo:
                 # Check if this is a media group
                 if message.media_group_id:
                     logger.info(f"   📸 P2P Sell media group detected: {message.media_group_id}")
@@ -4074,6 +4256,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"   🔄 Processing P2P SELL transaction: {tx_info['usdt']} USDT + {tx_info['fee']} fee = {tx_info['mmk']:,.0f} MMK")
                     await process_p2p_sell_transaction(update, context, tx_info)
                     return
+            else:
+                # No photo and no bank breakdown - error
+                await send_alert(message, "❌ P2P Sell requires either photos (for OCR) or bank breakdown in message", context)
+                return
     
     # Handle additional photos in P2P sell media group (photos without caption)
     if has_photo and message.media_group_id:
