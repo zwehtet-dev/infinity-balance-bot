@@ -7,9 +7,14 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+.kiro/
 
 # Logs
 *.log
 
-# sqlite db
-*.db 
+# Database
+*.db
+
+# Temp files
+media_group_photos/
+.DS_Store

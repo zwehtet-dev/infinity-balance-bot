@@ -853,9 +853,14 @@ BANK TYPE IDENTIFICATION (CRITICAL):
    - Amount displayed as "-X,XXX USDT" with USD equivalent below
    
 2. BINANCE - Identify by these features:
-   - Yellow/gold Binance logo
-   - Chinese text: 金额, 网络手续费
-   - Shows withdrawal details in Chinese
+   - Yellow/gold Binance logo or Binance branding
+   - "Withdrawal Details" title at top
+   - Text "Crypto transferred out of Binance" or similar
+   - Shows Network (BSC, TRC20, etc.), Address, Txid, Amount, Network fee
+   - Has "Withdraw Again" button (yellow) at bottom
+   - Chinese version: 金额, 网络手续费
+   - English version: Amount, Network fee, Withdrawal Wallet, Spot Wallet
+   - Shows "Completed" status with green checkmark
    
 3. WALLET (generic) - Use only if neither Swift nor Binance
 
@@ -864,19 +869,33 @@ RECEIPT STRUCTURE (Chinese Binance/Exchange):
 - 金额 (Amount): 148.368 USDT ← TOTAL we spent (this is what we need!)
 - 网络手续费 (Network fee): 1 USDT
 
+RECEIPT STRUCTURE (English Binance):
+- Main display: "-1,200 USDT" with "Completed" status
+- "Crypto transferred out of Binance"
+- Amount: 1,200 USDT
+- Network fee: 0 USDT
+- Return: {"amount": 1200, "network_fee": 0, "total_amount": 1200, "bank_type": "binance"}
+
 For SELL transactions, we need the TOTAL spent:
 - total_amount = main_displayed_amount + network_fee
 - OR total_amount = 金额 (Amount) field directly
 
 EXAMPLES:
 
-1. Binance Withdrawal Receipt:
+1. Binance Withdrawal Receipt (Chinese):
    - Main display: "-147.368 USDT" (customer receives)
    - 金额: 148.368 USDT (total we spent)
    - 网络手续费: 1 USDT
    Return: {"amount": 147.368, "network_fee": 1, "total_amount": 148.368, "bank_type": "binance"}
 
-2. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
+2. Binance Withdrawal Receipt (English):
+   - "Withdrawal Details" title, "Crypto transferred out of Binance"
+   - Main display: "-1,200 USDT" with green "Completed" checkmark
+   - Network: BSC, Amount: 1,200 USDT, Network fee: 0 USDT
+   - Has yellow "Withdraw Again" button
+   Return: {"amount": 1200, "network_fee": 0, "total_amount": 1200, "bank_type": "binance"}
+
+3. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
    - Shows: "-1,003 USDT" sent (with "1,001.72 $" below)
    - Network fee: 8.4799 TRX (2.50 $) ← Convert to USDT: ~2.50
    - Recipient: TJKBfj3...Dnv4NKY (TRC20 address)
@@ -1007,14 +1026,19 @@ BANK TYPE IDENTIFICATION (CRITICAL):
    - Amount displayed as "-X,XXX USDT" with USD equivalent below
    
 2. BINANCE - Identify by these features:
-   - Yellow/gold Binance logo
-   - Chinese text: 金额, 网络手续费
-   - Shows withdrawal details in Chinese
+   - Yellow/gold Binance logo or Binance branding
+   - "Withdrawal Details" title at top
+   - Text "Crypto transferred out of Binance" or similar
+   - Shows Network (BSC, TRC20, etc.), Address, Txid, Amount, Network fee
+   - Has "Withdraw Again" button (yellow) at bottom
+   - Chinese version: 金额, 网络手续费
+   - English version: Amount, Network fee, Withdrawal Wallet, Spot Wallet
+   - Shows "Completed" status with green checkmark
    
 3. WALLET (generic) - Use only if neither Swift nor Binance
 
 CRITICAL - READ THE MAIN DISPLAYED AMOUNT:
-- Look for the LARGE displayed amount at the top (e.g., "-147.368 USDT")
+- Look for the LARGE displayed amount at the top (e.g., "-147.368 USDT" or "-1,200 USDT")
 - This is the ACTUAL amount we receive after network fee is deducted
 - DO NOT use the "金额" (Amount) field which shows amount BEFORE fee deduction
 - The network fee is already subtracted from the main displayed amount
@@ -1024,18 +1048,30 @@ RECEIPT STRUCTURE (Chinese Binance/Exchange):
 - 金额 (Amount): 148.368 USDT ← This is before fee, DO NOT use this
 - 网络手续费 (Network fee): 1 USDT ← Fee already deducted from main amount
 
+RECEIPT STRUCTURE (English Binance):
+- Main display: "-1,200 USDT" with "Completed" status
+- "Crypto transferred out of Binance"
+- Amount: 1,200 USDT, Network fee: 0 USDT
+- → Return: {"received_amount": 1200, "network_fee": 0, "bank_type": "binance"}
+
 CALCULATION:
 - Main displayed amount = 金额 - 网络手续费
 - Example: 147.368 = 148.368 - 1
 
 EXAMPLES:
-1. Binance Receipt shows:
+1. Binance Receipt (Chinese) shows:
    - Main display: "-147.368 USDT"
    - 金额: 148.368 USDT
    - 网络手续费: 1 USDT
    → Return: {"received_amount": 147.368, "network_fee": 1, "bank_type": "binance"}
 
-2. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
+2. Binance Receipt (English) shows:
+   - "Withdrawal Details" title, "Crypto transferred out of Binance"
+   - Main display: "-1,200 USDT" with green "Completed" checkmark
+   - Network: BSC, Amount: 1,200 USDT, Network fee: 0 USDT
+   → Return: {"received_amount": 1200, "network_fee": 0, "bank_type": "binance"}
+
+3. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
    - Main display: "-1,003 USDT" (with "1,001.72 $" below)
    - Network fee: 8.4799 TRX (2.50 $)
    - Recipient: TJKBfj3...Dnv4NKY
@@ -1275,7 +1311,54 @@ def extract_transaction_info(text):
         Sell 19,149,270/4815.19=3976.84fee-0.78
         2,042,960 to San (Wave)
         17,106,310 to San (Kpay P)
+    
+    New P2P Sell format (starts with "P2P Sell"):
+        P2P Sell 1277.27×4148.30=5298500fee-0.12 5000000 to San (Wave)298500 to San (Kpay P)
+        Format: P2P Sell USDT×RATE=MMKfee-FEE AMOUNT to PREFIX (BANK)...
     """
+    # Check for new P2P Sell format (starts with "P2P Sell" and uses × multiplication sign)
+    # Format: P2P Sell USDT×RATE=MMKfee-FEE AMOUNT to PREFIX (BANK)...
+    if text.strip().lower().startswith('p2p sell'):
+        # Pattern: P2P Sell USDT×RATE=MMKfee-FEE
+        # × can be × (multiplication sign) or x or *
+        p2p_new_pattern = r'p2p\s+sell\s+([\d,]+(?:\.\d+)?)\s*[×xX\*]\s*([\d,]+(?:\.\d+)?)\s*=\s*([\d,]+(?:\.\d+)?)\s*fee\s*-?\s*([\d.]+)'
+        match = re.search(p2p_new_pattern, text, re.IGNORECASE)
+        
+        if match:
+            usdt_amount = float(match.group(1).replace(',', ''))
+            rate = float(match.group(2).replace(',', ''))
+            mmk_amount = float(match.group(3).replace(',', ''))
+            fee = float(match.group(4))
+            
+            # Check for bank breakdown in the message (e.g., "5000000 to San (Wave)")
+            # Pattern: AMOUNT to PREFIX (BANK) - can be concatenated without space
+            # Use findall to get all matches, handling both spaced and non-spaced formats
+            bank_breakdown_pattern = r'([\d,]+(?:\.\d+)?)\s*to\s+([A-Za-z\s]+?)\s*\(([^)]+)\)'
+            bank_matches = re.findall(bank_breakdown_pattern, text, re.IGNORECASE)
+            
+            bank_breakdown = []
+            if bank_matches:
+                for amount_str, prefix, bank in bank_matches:
+                    amount = float(amount_str.replace(',', ''))
+                    full_name = f"{prefix.strip()}({bank.strip()})"
+                    bank_breakdown.append({
+                        'amount': amount,
+                        'prefix': prefix.strip(),
+                        'bank': bank.strip(),
+                        'bank_name': full_name
+                    })
+                logger.info(f"P2P Sell (new format) with bank breakdown: {bank_breakdown}")
+            
+            return {
+                'type': 'p2p_sell',
+                'mmk': mmk_amount,
+                'usdt': usdt_amount,
+                'rate': rate,
+                'fee': fee,
+                'total_usdt': usdt_amount + fee,
+                'bank_breakdown': bank_breakdown if bank_breakdown else None
+            }
+    
     # Check for P2P sell format (contains 'fee-' in the message)
     if 'fee-' in text.lower() or 'fee -' in text.lower():
         # P2P Sell format: sell 13000000/3222.6=4034.00981 fee-6.44
