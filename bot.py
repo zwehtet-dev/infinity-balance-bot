@@ -60,14 +60,24 @@ def init_database():
     cursor = conn.cursor()
     
     # User prefixes table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_prefixes (
-            user_id INTEGER PRIMARY KEY,
-            prefix_name TEXT NOT NULL,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_prefixes (
+                user_id INTEGER PRIMARY KEY,
+                prefix_name TEXT NOT NULL,
+                username TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_prefixes (
+                user_id SERIAL PRIMARY KEY,
+                prefix_name TEXT NOT NULL,
+                username TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     # Settings table for receiving USDT account
     cursor.execute('''
@@ -79,28 +89,52 @@ def init_database():
     ''')
     
     # MMK bank accounts table for verification
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS mmk_bank_accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bank_name TEXT NOT NULL UNIQUE,
-            account_number TEXT NOT NULL,
-            account_holder TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mmk_bank_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_name TEXT NOT NULL UNIQUE,
+                account_number TEXT NOT NULL,
+                account_holder TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mmk_bank_accounts (
+                id SERIAL PRIMARY KEY,
+                bank_name TEXT NOT NULL UNIQUE,
+                account_number TEXT NOT NULL,
+                account_holder TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     # Media group photos table for storing downloaded photos
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS media_group_photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            media_group_id TEXT NOT NULL,
-            message_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(media_group_id, message_id)
-        )
-    ''')
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS media_group_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                media_group_id TEXT NOT NULL,
+                message_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(media_group_id, message_id)
+            )
+        ''')
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS media_group_photos (
+                id SERIAL PRIMARY KEY,
+                media_group_id TEXT NOT NULL,
+                message_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(media_group_id, message_id)
+            )
+        ''')
     
     # Create index for faster lookups
     cursor.execute('''
@@ -111,21 +145,38 @@ def init_database():
     ''')
     
     # Sale receipt OCR results table - stores pre-scanned receipt data
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sale_receipt_ocr (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER NOT NULL,
-            media_group_id TEXT,
-            receipt_index INTEGER DEFAULT 0,
-            transaction_type TEXT,
-            detected_amount REAL,
-            detected_bank TEXT,
-            detected_usdt REAL,
-            ocr_raw_data TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(message_id, receipt_index)
-        )
-    ''')
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sale_receipt_ocr (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                media_group_id TEXT,
+                receipt_index INTEGER DEFAULT 0,
+                transaction_type TEXT,
+                detected_amount REAL,
+                detected_bank TEXT,
+                detected_usdt REAL,
+                ocr_raw_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(message_id, receipt_index)
+            )
+        ''')
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sale_receipt_ocr (
+                id SERIAL PRIMARY KEY,
+                message_id INTEGER NOT NULL,
+                media_group_id TEXT,
+                receipt_index INTEGER DEFAULT 0,
+                transaction_type TEXT,
+                detected_amount REAL,
+                detected_bank TEXT,
+                detected_usdt REAL,
+                ocr_raw_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(message_id, receipt_index)
+            )
+        ''')
     
     # Create index for sale receipt lookups
     cursor.execute('''
@@ -136,10 +187,17 @@ def init_database():
     ''')
     
     # Set default receiving USDT account if not exists
-    cursor.execute('''
-        INSERT OR IGNORE INTO settings (key, value)
-        VALUES ('receiving_usdt_account', 'ACT(Wallet)')
-    ''')
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR IGNORE INTO settings (key, value)
+            VALUES ('receiving_usdt_account', 'ACT(Wallet)')
+        ''')
+    else:
+        cursor.execute('''
+            INSERT INTO settings (key, value)
+            VALUES ('receiving_usdt_account', 'ACT(Wallet)')
+            ON CONFLICT (key) DO NOTHING
+        ''')
     
     # Insert default MMK bank accounts if not exists
     default_banks = [
@@ -151,10 +209,17 @@ def init_database():
     ]
     
     for bank_name, account_number, account_holder in default_banks:
-        cursor.execute('''
-            INSERT OR IGNORE INTO mmk_bank_accounts (bank_name, account_number, account_holder)
-            VALUES (?, ?, ?)
-        ''', (bank_name, account_number, account_holder))
+        if isinstance(conn, sqlite3.Connection):
+            cursor.execute('''
+                INSERT OR IGNORE INTO mmk_bank_accounts (bank_name, account_number, account_holder)
+                VALUES (?, ?, ?)
+            ''', (bank_name, account_number, account_holder))
+        else:
+            cursor.execute('''
+                INSERT INTO mmk_bank_accounts (bank_name, account_number, account_holder)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (bank_name) DO NOTHING
+            ''', (bank_name, account_number, account_holder))
     
     conn.commit()
     conn.close()
@@ -216,14 +281,20 @@ def get_media_group_photos(media_group_id: str) -> list:
 
 def get_media_group_by_message_id(message_id: int) -> tuple:
     """Get media group ID and all photos by any message ID in the group"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # First find the media_group_id for this message
-    cursor.execute('''
-        SELECT media_group_id FROM media_group_photos
-        WHERE message_id = ?
-    ''', (message_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT media_group_id FROM media_group_photos
+            WHERE message_id = ?
+        ''', (message_id,))
+    else:
+        cursor.execute('''
+            SELECT media_group_id FROM media_group_photos
+            WHERE message_id = %s
+        ''', (message_id,))
     result = cursor.fetchone()
     
     if not result:
@@ -233,11 +304,18 @@ def get_media_group_by_message_id(message_id: int) -> tuple:
     media_group_id = result[0]
     
     # Get all photos in this media group
-    cursor.execute('''
-        SELECT message_id, file_path FROM media_group_photos
-        WHERE media_group_id = ?
-        ORDER BY message_id
-    ''', (media_group_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT message_id, file_path FROM media_group_photos
+            WHERE media_group_id = ?
+            ORDER BY message_id
+        ''', (media_group_id,))
+    else:
+        cursor.execute('''
+            SELECT message_id, file_path FROM media_group_photos
+            WHERE media_group_id = %s
+            ORDER BY message_id
+        ''', (media_group_id,))
     photos = cursor.fetchall()
     conn.close()
     
@@ -245,14 +323,20 @@ def get_media_group_by_message_id(message_id: int) -> tuple:
 
 def delete_media_group_photos(media_group_id: str):
     """Delete all photos for a media group from disk and database"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Get file paths first
-    cursor.execute('''
-        SELECT file_path FROM media_group_photos
-        WHERE media_group_id = ?
-    ''', (media_group_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT file_path FROM media_group_photos
+            WHERE media_group_id = ?
+        ''', (media_group_id,))
+    else:
+        cursor.execute('''
+            SELECT file_path FROM media_group_photos
+            WHERE media_group_id = %s
+        ''', (media_group_id,))
     results = cursor.fetchall()
     
     # Delete files from disk
@@ -265,10 +349,16 @@ def delete_media_group_photos(media_group_id: str):
             logger.warning(f"Could not delete file {file_path}: {e}")
     
     # Delete from database
-    cursor.execute('''
-        DELETE FROM media_group_photos
-        WHERE media_group_id = ?
-    ''', (media_group_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            DELETE FROM media_group_photos
+            WHERE media_group_id = ?
+        ''', (media_group_id,))
+    else:
+        cursor.execute('''
+            DELETE FROM media_group_photos
+            WHERE media_group_id = %s
+        ''', (media_group_id,))
     conn.commit()
     conn.close()
     
@@ -276,14 +366,20 @@ def delete_media_group_photos(media_group_id: str):
 
 def cleanup_old_media_group_photos(max_age_hours: int = 24):
     """Clean up media group photos older than max_age_hours"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Find old media groups
-    cursor.execute('''
-        SELECT DISTINCT media_group_id FROM media_group_photos
-        WHERE created_at < datetime('now', ? || ' hours')
-    ''', (f'-{max_age_hours}',))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT DISTINCT media_group_id FROM media_group_photos
+            WHERE created_at < datetime('now', ? || ' hours')
+        ''', (f'-{max_age_hours}',))
+    else:
+        cursor.execute('''
+            SELECT DISTINCT media_group_id FROM media_group_photos
+            WHERE created_at < NOW() - INTERVAL '%s hours'
+        ''', (max_age_hours,))
     old_groups = cursor.fetchall()
     conn.close()
     
@@ -303,18 +399,34 @@ def save_sale_receipt_ocr(message_id: int, receipt_index: int, transaction_type:
                           detected_usdt: float = None, media_group_id: str = None,
                           ocr_raw_data: dict = None):
     """Save OCR result for a sale receipt to database"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     raw_data_json = json.dumps(ocr_raw_data) if ocr_raw_data else None
     
-    cursor.execute('''
-        INSERT OR REPLACE INTO sale_receipt_ocr 
-        (message_id, media_group_id, receipt_index, transaction_type, 
-         detected_amount, detected_bank, detected_usdt, ocr_raw_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (message_id, media_group_id, receipt_index, transaction_type,
-          detected_amount, detected_bank, detected_usdt, raw_data_json))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR REPLACE INTO sale_receipt_ocr 
+            (message_id, media_group_id, receipt_index, transaction_type, 
+             detected_amount, detected_bank, detected_usdt, ocr_raw_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (message_id, media_group_id, receipt_index, transaction_type,
+              detected_amount, detected_bank, detected_usdt, raw_data_json))
+    else:
+        cursor.execute('''
+            INSERT INTO sale_receipt_ocr 
+            (message_id, media_group_id, receipt_index, transaction_type, 
+             detected_amount, detected_bank, detected_usdt, ocr_raw_data)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (message_id, receipt_index) DO UPDATE SET 
+                media_group_id = EXCLUDED.media_group_id,
+                transaction_type = EXCLUDED.transaction_type,
+                detected_amount = EXCLUDED.detected_amount,
+                detected_bank = EXCLUDED.detected_bank,
+                detected_usdt = EXCLUDED.detected_usdt,
+                ocr_raw_data = EXCLUDED.ocr_raw_data
+        ''', (message_id, media_group_id, receipt_index, transaction_type,
+              detected_amount, detected_bank, detected_usdt, raw_data_json))
     conn.commit()
     conn.close()
     
@@ -323,15 +435,24 @@ def save_sale_receipt_ocr(message_id: int, receipt_index: int, transaction_type:
 
 def get_sale_receipt_ocr(message_id: int) -> list:
     """Get all OCR results for a sale message (supports multiple receipts)"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT message_id, media_group_id, receipt_index, transaction_type,
-               detected_amount, detected_bank, detected_usdt, ocr_raw_data
-        FROM sale_receipt_ocr
-        WHERE message_id = ?
-        ORDER BY receipt_index
-    ''', (message_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT message_id, media_group_id, receipt_index, transaction_type,
+                   detected_amount, detected_bank, detected_usdt, ocr_raw_data
+            FROM sale_receipt_ocr
+            WHERE message_id = ?
+            ORDER BY receipt_index
+        ''', (message_id,))
+    else:
+        cursor.execute('''
+            SELECT message_id, media_group_id, receipt_index, transaction_type,
+                   detected_amount, detected_bank, detected_usdt, ocr_raw_data
+            FROM sale_receipt_ocr
+            WHERE message_id = %s
+            ORDER BY receipt_index
+        ''', (message_id,))
     results = cursor.fetchall()
     conn.close()
     
@@ -353,15 +474,24 @@ def get_sale_receipt_ocr(message_id: int) -> list:
 
 def get_sale_receipt_ocr_by_media_group(media_group_id: str) -> list:
     """Get all OCR results for a media group"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT message_id, media_group_id, receipt_index, transaction_type,
-               detected_amount, detected_bank, detected_usdt, ocr_raw_data
-        FROM sale_receipt_ocr
-        WHERE media_group_id = ?
-        ORDER BY receipt_index
-    ''', (media_group_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            SELECT message_id, media_group_id, receipt_index, transaction_type,
+                   detected_amount, detected_bank, detected_usdt, ocr_raw_data
+            FROM sale_receipt_ocr
+            WHERE media_group_id = ?
+            ORDER BY receipt_index
+        ''', (media_group_id,))
+    else:
+        cursor.execute('''
+            SELECT message_id, media_group_id, receipt_index, transaction_type,
+                   detected_amount, detected_bank, detected_usdt, ocr_raw_data
+            FROM sale_receipt_ocr
+            WHERE media_group_id = %s
+            ORDER BY receipt_index
+        ''', (media_group_id,))
     results = cursor.fetchall()
     conn.close()
     
@@ -383,12 +513,18 @@ def get_sale_receipt_ocr_by_media_group(media_group_id: str) -> list:
 
 def delete_sale_receipt_ocr(message_id: int):
     """Delete OCR results for a sale message"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        DELETE FROM sale_receipt_ocr
-        WHERE message_id = ?
-    ''', (message_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE message_id = ?
+        ''', (message_id,))
+    else:
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE message_id = %s
+        ''', (message_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -398,12 +534,18 @@ def delete_sale_receipt_ocr(message_id: int):
 
 def delete_sale_receipt_ocr_by_media_group(media_group_id: str):
     """Delete OCR results for a media group"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        DELETE FROM sale_receipt_ocr
-        WHERE media_group_id = ?
-    ''', (media_group_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE media_group_id = ?
+        ''', (media_group_id,))
+    else:
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE media_group_id = %s
+        ''', (media_group_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -413,12 +555,18 @@ def delete_sale_receipt_ocr_by_media_group(media_group_id: str):
 
 def cleanup_old_sale_receipt_ocr(max_age_hours: int = 48):
     """Clean up old sale receipt OCR data"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        DELETE FROM sale_receipt_ocr
-        WHERE created_at < datetime('now', ? || ' hours')
-    ''', (f'-{max_age_hours}',))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE created_at < datetime('now', ? || ' hours')
+        ''', (f'-{max_age_hours}',))
+    else:
+        cursor.execute('''
+            DELETE FROM sale_receipt_ocr
+            WHERE created_at < NOW() - INTERVAL '%s hours'
+        ''', (max_age_hours,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -445,28 +593,38 @@ def banks_match(bank_name1, bank_name2):
 
 def get_user_prefix(user_id):
     """Get prefix name for a user"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT prefix_name FROM user_prefixes WHERE user_id = ?', (user_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('SELECT prefix_name FROM user_prefixes WHERE user_id = ?', (user_id,))
+    else:
+        cursor.execute('SELECT prefix_name FROM user_prefixes WHERE user_id = %s', (user_id,))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
 
 def set_user_prefix(user_id, prefix_name, username=None):
     """Set prefix name for a user"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO user_prefixes (user_id, prefix_name, username)
-        VALUES (?, ?, ?)
-    ''', (user_id, prefix_name, username))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR REPLACE INTO user_prefixes (user_id, prefix_name, username)
+            VALUES (?, ?, ?)
+        ''', (user_id, prefix_name, username))
+    else:
+        cursor.execute('''
+            INSERT INTO user_prefixes (user_id, prefix_name, username)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET prefix_name = EXCLUDED.prefix_name, username = EXCLUDED.username
+        ''', (user_id, prefix_name, username))
     conn.commit()
     conn.close()
     logger.info(f"✅ Set prefix '{prefix_name}' for user {user_id} (@{username})")
 
 def get_all_user_prefixes():
     """Get all user-prefix mappings"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id, prefix_name, username FROM user_prefixes ORDER BY prefix_name')
     results = cursor.fetchall()
@@ -475,42 +633,62 @@ def get_all_user_prefixes():
 
 def get_receiving_usdt_account():
     """Get the receiving USDT account for buy transactions"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT value FROM settings WHERE key = ?', ('receiving_usdt_account',))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('SELECT value FROM settings WHERE key = ?', ('receiving_usdt_account',))
+    else:
+        cursor.execute('SELECT value FROM settings WHERE key = %s', ('receiving_usdt_account',))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else 'ACT(Wallet)'
 
 def set_receiving_usdt_account(account_name):
     """Set the receiving USDT account for buy transactions"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO settings (key, value, updated_at)
-        VALUES ('receiving_usdt_account', ?, CURRENT_TIMESTAMP)
-    ''', (account_name,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES ('receiving_usdt_account', ?, CURRENT_TIMESTAMP)
+        ''', (account_name,))
+    else:
+        cursor.execute('''
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ('receiving_usdt_account', %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+        ''', (account_name,))
     conn.commit()
     conn.close()
     logger.info(f"✅ Set receiving USDT account to '{account_name}'")
 
 def set_mmk_bank_account(bank_name, account_number, account_holder):
     """Set MMK bank account details for verification"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO mmk_bank_accounts (bank_name, account_number, account_holder, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (bank_name, account_number, account_holder))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR REPLACE INTO mmk_bank_accounts (bank_name, account_number, account_holder, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (bank_name, account_number, account_holder))
+    else:
+        cursor.execute('''
+            INSERT INTO mmk_bank_accounts (bank_name, account_number, account_holder, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (bank_name) DO UPDATE SET account_number = EXCLUDED.account_number, account_holder = EXCLUDED.account_holder, updated_at = EXCLUDED.updated_at
+        ''', (bank_name, account_number, account_holder))
     conn.commit()
     conn.close()
     logger.info(f"✅ Set MMK bank account: {bank_name} - {account_holder} ({account_number})")
 
 def get_mmk_bank_account(bank_name):
     """Get MMK bank account details"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = ?', (bank_name,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = ?', (bank_name,))
+    else:
+        cursor.execute('SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = %s', (bank_name,))
     result = cursor.fetchone()
     conn.close()
     if result:
@@ -519,7 +697,7 @@ def get_mmk_bank_account(bank_name):
 
 def get_all_mmk_bank_accounts():
     """Get all MMK bank accounts"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT bank_name, account_number, account_holder FROM mmk_bank_accounts ORDER BY bank_name')
     results = cursor.fetchall()
@@ -4802,9 +4980,12 @@ async def remove_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Remove from database
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM user_prefixes WHERE user_id = ?', (user_id,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('DELETE FROM user_prefixes WHERE user_id = ?', (user_id,))
+    else:
+        cursor.execute('DELETE FROM user_prefixes WHERE user_id = %s', (user_id,))
     conn.commit()
     conn.close()
     
@@ -5054,9 +5235,12 @@ async def remove_mmk_bank_command(update: Update, context: ContextTypes.DEFAULT_
         return
     
     # Remove from database
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM mmk_bank_accounts WHERE bank_name = ?', (bank_name,))
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('DELETE FROM mmk_bank_accounts WHERE bank_name = ?', (bank_name,))
+    else:
+        cursor.execute('DELETE FROM mmk_bank_accounts WHERE bank_name = %s', (bank_name,))
     conn.commit()
     conn.close()
     
