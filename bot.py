@@ -10,8 +10,8 @@ import json
 import logging
 import base64
 import sqlite3
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 import asyncio
 import traceback
 from telegram import Update
@@ -47,7 +47,7 @@ def get_db_connection():
     """Return a database connection (PostgreSQL or SQLite based on env)"""
     db_url = os.getenv('DATABASE_URL')
     if db_url and db_url.startswith('postgres'):
-        conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.DictCursor)
+        conn = psycopg.connect(db_url, row_factory=dict_row)
         return conn
     else:
         db_file = os.getenv('SQLITE_DB_FILE', 'bot_data.db')
@@ -107,6 +107,30 @@ def init_database():
                 bank_name TEXT NOT NULL UNIQUE,
                 account_number TEXT NOT NULL,
                 account_holder TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    
+    # USDT bank accounts table for receiving USDT (buy transactions)
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS usdt_bank_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_name TEXT NOT NULL UNIQUE,
+                wallet_address TEXT NOT NULL,
+                network TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS usdt_bank_accounts (
+                id SERIAL PRIMARY KEY,
+                bank_name TEXT NOT NULL UNIQUE,
+                wallet_address TEXT NOT NULL,
+                network TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -221,9 +245,30 @@ def init_database():
                 ON CONFLICT (bank_name) DO NOTHING
             ''', (bank_name, account_number, account_holder))
     
+    # Insert default USDT bank accounts if not exists
+    default_usdt_banks = [
+        ('ACT(BNB Wallet)', '0x640e9AEde10B610834876cCc0ef2576C9469CB0e', 'BNB'),
+        ('ACT(Tron Wallet)', 'TCFKANz7vhaMLtxjTSYSZRRGdVivNNPDEy', 'Tron'),
+        ('ACT(SOL Wallet)', 'EECRtME4j6uqd3GsjbkoWhKuYxX2V7LCcHjwP3y5JPnD', 'SOL'),
+        ('ACT(TON Wallet)', 'UQBkM-eV3JW6pzFaf_JGvTewOEw6nl38lXIdnDMF3H8UpRCQ', 'TON'),
+    ]
+    
+    for bank_name, wallet_address, network in default_usdt_banks:
+        if isinstance(conn, sqlite3.Connection):
+            cursor.execute('''
+                INSERT OR IGNORE INTO usdt_bank_accounts (bank_name, wallet_address, network)
+                VALUES (?, ?, ?)
+            ''', (bank_name, wallet_address, network))
+        else:
+            cursor.execute('''
+                INSERT INTO usdt_bank_accounts (bank_name, wallet_address, network)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (bank_name) DO NOTHING
+            ''', (bank_name, wallet_address, network))
+    
     conn.commit()
     conn.close()
-    logger.info("✅ Database initialized with default banks")
+    logger.info("✅ Database initialized with default MMK and USDT banks")
 
 # Media group photos directory
 MEDIA_GROUP_DIR = 'media_group_photos'
@@ -703,6 +748,63 @@ def get_all_mmk_bank_accounts():
     results = cursor.fetchall()
     conn.close()
     return [{'bank_name': r[0], 'account_number': r[1], 'account_holder': r[2]} for r in results]
+
+def set_usdt_bank_account(bank_name, wallet_address, network):
+    """Set USDT bank account details for receiving USDT"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('''
+            INSERT OR REPLACE INTO usdt_bank_accounts (bank_name, wallet_address, network, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (bank_name, wallet_address, network))
+    else:
+        cursor.execute('''
+            INSERT INTO usdt_bank_accounts (bank_name, wallet_address, network, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (bank_name) DO UPDATE SET wallet_address = EXCLUDED.wallet_address, network = EXCLUDED.network, updated_at = EXCLUDED.updated_at
+        ''', (bank_name, wallet_address, network))
+    conn.commit()
+    conn.close()
+    logger.info(f"✅ Set USDT bank account: {bank_name} - {wallet_address} ({network})")
+
+def get_usdt_bank_account(bank_name):
+    """Get USDT bank account details"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('SELECT wallet_address, network FROM usdt_bank_accounts WHERE bank_name = ?', (bank_name,))
+    else:
+        cursor.execute('SELECT wallet_address, network FROM usdt_bank_accounts WHERE bank_name = %s', (bank_name,))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return {'wallet_address': result[0], 'network': result[1]}
+    return None
+
+def get_all_usdt_bank_accounts():
+    """Get all USDT bank accounts"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT bank_name, wallet_address, network FROM usdt_bank_accounts ORDER BY bank_name')
+    results = cursor.fetchall()
+    conn.close()
+    return [{'bank_name': r[0], 'wallet_address': r[1], 'network': r[2]} for r in results]
+
+def remove_usdt_bank_account(bank_name):
+    """Remove USDT bank account"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if isinstance(conn, sqlite3.Connection):
+        cursor.execute('DELETE FROM usdt_bank_accounts WHERE bank_name = ?', (bank_name,))
+    else:
+        cursor.execute('DELETE FROM usdt_bank_accounts WHERE bank_name = %s', (bank_name,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if deleted > 0:
+        logger.info(f"✅ Removed USDT bank account: {bank_name}")
+    return deleted > 0
 
 async def send_alert(message, alert_text, context):
     """Send alert message (error/warning) to alert topic if configured, otherwise reply to message
@@ -1239,41 +1341,50 @@ BANK TYPE IDENTIFICATION (CRITICAL):
    
 3. WALLET (generic) - Use only if neither Swift nor Binance
 
-CRITICAL - READ THE MAIN DISPLAYED AMOUNT:
-- Look for the LARGE displayed amount at the top (e.g., "-147.368 USDT" or "-1,200 USDT")
-- This is the ACTUAL amount we receive after network fee is deducted
-- DO NOT use the "金额" (Amount) field which shows amount BEFORE fee deduction
-- The network fee is already subtracted from the main displayed amount
+CRITICAL CALCULATION FOR BINANCE RECEIPTS:
+For Binance receipts, the amount WE RECEIVE = Amount field - Network fee field
+
+RECEIPT STRUCTURE (English Binance):
+- Main display: "-240 USDT" (this is just display, ignore this)
+- "Crypto transferred out of Binance"
+- Amount: 240.01 USDT ← This is the gross amount
+- Network fee: 0.01 USDT ← This fee is deducted
+- WE RECEIVE: 240.01 - 0.01 = 240 USDT
+- → Return: {"received_amount": 240, "network_fee": 0.01, "bank_type": "binance"}
 
 RECEIPT STRUCTURE (Chinese Binance/Exchange):
 - Main display: "-147.368 USDT" ← THIS IS WHAT WE RECEIVE (use this!)
 - 金额 (Amount): 148.368 USDT ← This is before fee, DO NOT use this
 - 网络手续费 (Network fee): 1 USDT ← Fee already deducted from main amount
 
-RECEIPT STRUCTURE (English Binance):
-- Main display: "-1,200 USDT" with "Completed" status
-- "Crypto transferred out of Binance"
-- Amount: 1,200 USDT, Network fee: 0 USDT
-- → Return: {"received_amount": 1200, "network_fee": 0, "bank_type": "binance"}
-
-CALCULATION:
-- Main displayed amount = 金额 - 网络手续费
-- Example: 147.368 = 148.368 - 1
+CALCULATION RULES:
+1. For English Binance: received_amount = Amount field - Network fee field
+2. For Chinese Binance: received_amount = main displayed amount (already net of fees)
+3. For Swift: received_amount = main displayed amount (already net of fees)
 
 EXAMPLES:
-1. Binance Receipt (Chinese) shows:
+
+1. English Binance Receipt:
+   - "Withdrawal Details" title, "Crypto transferred out of Binance"
+   - Main display: "-240 USDT" with green "Completed" checkmark
+   - Amount: 240.01 USDT, Network fee: 0.01 USDT
+   - WE RECEIVE: 240.01 - 0.01 = 240 USDT
+   → Return: {"received_amount": 240, "network_fee": 0.01, "bank_type": "binance"}
+
+2. English Binance Receipt (no fee):
+   - "Withdrawal Details" title, "Crypto transferred out of Binance"
+   - Main display: "-1,200 USDT" with green "Completed" checkmark
+   - Amount: 1,200 USDT, Network fee: 0 USDT
+   - WE RECEIVE: 1,200 - 0 = 1,200 USDT
+   → Return: {"received_amount": 1200, "network_fee": 0, "bank_type": "binance"}
+
+3. Chinese Binance Receipt:
    - Main display: "-147.368 USDT"
    - 金额: 148.368 USDT
    - 网络手续费: 1 USDT
    → Return: {"received_amount": 147.368, "network_fee": 1, "bank_type": "binance"}
 
-2. Binance Receipt (English) shows:
-   - "Withdrawal Details" title, "Crypto transferred out of Binance"
-   - Main display: "-1,200 USDT" with green "Completed" checkmark
-   - Network: BSC, Amount: 1,200 USDT, Network fee: 0 USDT
-   → Return: {"received_amount": 1200, "network_fee": 0, "bank_type": "binance"}
-
-3. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
+4. Swift Receipt (with N logo, TRX network fee, "View on block explorer"):
    - Main display: "-1,003 USDT" (with "1,001.72 $" below)
    - Network fee: 8.4799 TRX (2.50 $)
    - Recipient: TJKBfj3...Dnv4NKY
@@ -1281,16 +1392,17 @@ EXAMPLES:
 
 RETURN JSON FORMAT:
 {
-    "received_amount": <the MAIN DISPLAYED amount, which is amount AFTER fee deduction>,
+    "received_amount": <the amount we actually receive after network fee deduction>,
     "network_fee": <network fee if shown, 0 if not - for Swift, use the USD value from TRX fee>,
     "bank_type": "binance" or "swift" or "wallet"
 }
 
 CRITICAL: 
-- If you see "N" logo + "Network fee" in TRX + "View on block explorer" → bank_type = "swift"
-- received_amount = the large displayed amount (e.g., -147.368)
-- This is the FINAL amount we receive, NOT the amount before fee
-- Always return as positive number (ignore minus sign)"""
+- For English Binance: received_amount = Amount field - Network fee field
+- For Chinese Binance: received_amount = main displayed amount
+- For Swift: received_amount = main displayed amount
+- Always return amounts as positive numbers
+- bank_type must be "binance", "swift", or "wallet" (lowercase)"""
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -1497,7 +1609,155 @@ IMPORTANT:
     
     except Exception as e:
         logger.error(f"OCR bank matching error: {e}")
+        logger.error(traceback.format_exc())
+        return None
 
+async def ocr_match_usdt_receipt_to_banks(image_base64, usdt_banks_list):
+    """Match USDT receipt to registered USDT banks with confidence scores
+    
+    Args:
+        image_base64: Base64 encoded receipt image
+        usdt_banks_list: List of dicts with 'bank_id', 'bank_name', 'wallet_address', 'network'
+    
+    Returns:
+        {
+            "amount": 100.5,
+            "banks": {
+                1: 100,  # bank_id: confidence (0-100)
+                2: 0,
+                3: 0
+            }
+        }
+    """
+    try:
+        # Build bank list for prompt
+        bank_info_list = []
+        for bank in usdt_banks_list:
+            bank_id = bank['bank_id']
+            bank_name = bank['bank_name']
+            wallet = bank['wallet_address']
+            network = bank['network']
+            
+            # Get last 6 characters of wallet address for matching
+            last_6 = wallet[-6:] if len(wallet) >= 6 else wallet
+            first_6 = wallet[:6] if len(wallet) >= 6 else wallet
+            
+            bank_info_list.append(
+                f"Bank ID {bank_id}: {bank_name}\n"
+                f"  Network: {network}\n"
+                f"  Full Address: {wallet}\n"
+                f"  Starts with: {first_6}...\n"
+                f"  Ends with: ...{last_6}"
+            )
+        
+        banks_text = "\n\n".join(bank_info_list)
+        
+        prompt = f"""Analyze this USDT transfer receipt and match it to the correct receiving wallet.
+
+REGISTERED USDT WALLETS:
+{banks_text}
+
+NETWORK IDENTIFICATION GUIDE:
+- BNB (BEP20): Binance Smart Chain, address starts with 0x, network fee ~$0.5
+- ETH (ERC20): Ethereum, address starts with 0x, network fee >$1 (usually $2-10)
+- Tron (TRC20): Tron network, address starts with T, network fee ~$1-2
+- SOL: Solana network, base58 encoded address
+- TON: TON network, address format UQ...
+
+CRITICAL MATCHING RULES:
+- Check recipient/destination wallet address in the receipt
+- Match FULL address if visible, or last 6 characters if partially masked
+- For BNB vs ETH (same address): Check network fee amount
+  * If fee is ~$0.5 or less → BNB
+  * If fee is >$1 (typically $2-10) → ETH
+- Match network type (BEP20, TRC20, ERC20, SOL, TON)
+- Give 70 points for address match, 30 points for network match
+
+TASK:
+1. Extract the USDT amount (positive number)
+2. Extract recipient wallet address (full or partial)
+3. Extract network type if shown
+4. For EACH bank, calculate confidence score (0-100) based on:
+   - Wallet address match: 70 points
+   - Network match: 30 points
+   - Total: 100 points if both match perfectly
+
+RETURN EXACT JSON FORMAT:
+{{
+    "amount": <number>,
+    "banks": {{
+        "1": <confidence 0-100>,
+        "2": <confidence 0-100>,
+        "3": <confidence 0-100>
+    }}
+}}
+
+IMPORTANT:
+- Return confidence for ALL banks in the list
+- Amount must be positive number
+- Confidence must be 0-100 for each bank
+- Use bank IDs exactly as provided (as strings)
+- DO NOT include comments in JSON
+- DO NOT use trailing commas
+- ONLY ONE bank should have high confidence (the matching one)
+- For 0x addresses with low fee (~$0.5), match to BNB not ETH"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_base64}}
+                ]
+            }],
+            max_tokens=400
+        )
+        
+        result = response.choices[0].message.content.strip()
+        
+        # Remove markdown code blocks
+        result = re.sub(r'```json\s*|\s*```', '', result)
+        
+        # Extract JSON object
+        json_start = result.find('{')
+        json_end = result.rfind('}')
+        if json_start != -1 and json_end != -1:
+            result = result[json_start:json_end + 1]
+        
+        # Remove comments and trailing commas
+        result = re.sub(r'//.*?$', '', result, flags=re.MULTILINE)
+        result = re.sub(r'/\*.*?\*/', '', result, flags=re.DOTALL)
+        result = re.sub(r',(\s*[}\]])', r'\1', result)
+        
+        # Fix unquoted numeric keys
+        result = re.sub(r'(\{|,)\s*(\d+)\s*:', r'\1"\2":', result)
+        
+        logger.info(f"Cleaned USDT OCR JSON: {result[:200]}...")
+        
+        data = json.loads(result)
+        
+        # Ensure amount is positive
+        data['amount'] = abs(float(data.get('amount', 0)))
+        
+        # Ensure all banks have confidence scores
+        banks_confidence = data.get('banks', {})
+        for bank in usdt_banks_list:
+            bank_id = str(bank['bank_id'])
+            if bank_id not in banks_confidence:
+                banks_confidence[bank_id] = 0
+        
+        data['banks'] = banks_confidence
+        
+        # Log results
+        logger.info(f"USDT OCR Amount: {data['amount']}")
+        for bank_id, confidence in banks_confidence.items():
+            logger.info(f"  Bank ID {bank_id}: {confidence}% confidence")
+        
+        return data
+    
+    except Exception as e:
+        logger.error(f"USDT OCR bank matching error: {e}")
         logger.error(traceback.format_exc())
         return None
 
@@ -1517,7 +1777,65 @@ def extract_transaction_info(text):
     New P2P Sell format (starts with "P2P Sell"):
         P2P Sell 1277.27×4148.30=5298500fee-0.12 5000000 to San (Wave)298500 to San (Kpay P)
         Format: P2P Sell USDT×RATE=MMKfee-FEE AMOUNT to PREFIX (BANK)...
+        
+    Staff P2P Sell format (no OCR needed):
+        P2P Sell 440.18x4021 =17700001770000 to OKM (KBZ)From OKM(Swift)
+        Format: P2P Sell USDT×RATE =MMKAMOUNT to DEST_PREFIX (DEST_BANK)From SRC_PREFIX(SRC_BANK)
     """
+    # Check for staff P2P Sell format (no OCR, direct bank transfer)
+    # Format: P2P Sell USDT×RATE =MMKAMOUNT to DEST_PREFIX (DEST_BANK)From SRC_PREFIX(SRC_BANK)
+    if text.strip().lower().startswith('p2p sell'):
+        logger.info(f"Checking staff P2P sell format for text: '{text}'")
+        
+        # Handle multi-line format:
+        # P2P Sell 440.18x4021 =1770000
+        # 1770000 to OKM (KBZ)
+        # From OKM(Swift)
+        
+        # First extract the basic P2P sell info
+        basic_pattern = r'p2p\s+sell\s+([\d,]+(?:\.\d+)?)\s*[×xX\*]\s*([\d,]+(?:\.\d+)?)\s*=\s*([\d,]+(?:\.\d+)?)'
+        basic_match = re.search(basic_pattern, text, re.IGNORECASE)
+        
+        if basic_match:
+            usdt_amount = float(basic_match.group(1).replace(',', ''))
+            rate = float(basic_match.group(2).replace(',', ''))
+            mmk_amount = float(basic_match.group(3).replace(',', ''))
+            
+            # Look for destination bank: "to PREFIX (BANK)"
+            dest_pattern = r'to\s+([A-Za-z\s]+?)\s*\(([^)]+)\)'
+            dest_match = re.search(dest_pattern, text, re.IGNORECASE)
+            
+            # Look for source bank: "From PREFIX(BANK)" or "From PREFIX (BANK)"
+            src_pattern = r'from\s+([A-Za-z\s]+?)\s*\(([^)]+)\)'
+            src_match = re.search(src_pattern, text, re.IGNORECASE)
+            
+            if dest_match and src_match:
+                dest_prefix = dest_match.group(1).strip()
+                dest_bank = dest_match.group(2).strip()
+                src_prefix = src_match.group(1).strip()
+                src_bank = src_match.group(2).strip()
+                
+                dest_bank_name = f"{dest_prefix}({dest_bank})"
+                src_bank_name = f"{src_prefix}({src_bank})"
+                
+                logger.info(f"Staff P2P Sell matched: {usdt_amount} USDT -> +{mmk_amount:,.0f} MMK to {dest_bank_name}, -{usdt_amount} USDT from {src_bank_name}")
+                
+                return {
+                    'type': 'staff_p2p_sell',
+                    'mmk': mmk_amount,
+                    'usdt': usdt_amount,
+                    'rate': rate,
+                    'fee': 0,  # No fee in this format
+                    'total_usdt': usdt_amount,
+                    'dest_bank': dest_bank_name,
+                    'src_bank': src_bank_name,
+                    'bank_breakdown': None  # Not needed for this format
+                }
+            else:
+                logger.info(f"Staff P2P sell: basic pattern matched but missing bank info (dest: {bool(dest_match)}, src: {bool(src_match)})")
+        else:
+            logger.info(f"Staff P2P sell: basic pattern did not match")
+    
     # Check for new P2P Sell format (starts with "P2P Sell" and uses × multiplication sign)
     # Format: P2P Sell USDT×RATE=MMKfee-FEE AMOUNT to PREFIX (BANK)...
     if text.strip().lower().startswith('p2p sell'):
@@ -1632,11 +1950,11 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     balances = context.chat_data.get('balances')
     
     if not balances:
-        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
+        await send_alert(message, "❌ Balance not loaded", context)
         return
     
     if not message.photo:
-        await send_alert(message, "❌ No receipt photo", context)
+        await send_alert(message, "❌ No receipt", context)
         return
     
     # Get sender info (may or may not be staff for sale message)
@@ -1656,7 +1974,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     if not original_has_photo:
         # CASE 1: This is the SALE MESSAGE with USDT receipt from customer
         # NOTE: Sale message can be sent by ANYONE (not just staff)
-        # For BUY transactions, we only need to detect the USDT amount (no bank check needed)
+        # For BUY transactions, we need to verify customer sent USDT to one of our registered wallets
         logger.info(f"Buy: Processing as SALE MESSAGE - photo is USDT receipt from customer")
         
         # Get photo and OCR as USDT receipt
@@ -1665,30 +1983,75 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         photo_bytes = await photo_file.download_as_bytearray()
         photo_base64 = base64.b64encode(photo_bytes).decode('utf-8')
         
-        # OCR USDT receipt - detect RECEIVED amount only (no bank check needed for BUY)
-        usdt_result = await ocr_extract_usdt_received(photo_base64)
+        # Get all registered USDT banks for matching
+        registered_usdt_banks = get_all_usdt_bank_accounts()
+        
+        if not registered_usdt_banks:
+            await send_alert(message, "❌ No USDT banks registered", context)
+            return
+        
+        # Prepare banks list for OCR matching
+        usdt_banks_for_ocr = []
+        for idx, bank in enumerate(registered_usdt_banks, 1):
+            usdt_banks_for_ocr.append({
+                'bank_id': idx,
+                'bank_name': bank['bank_name'],
+                'wallet_address': bank['wallet_address'],
+                'network': bank['network']
+            })
+        
+        # OCR USDT receipt - match to registered banks
+        usdt_match_result = await ocr_match_usdt_receipt_to_banks(photo_base64, usdt_banks_for_ocr)
         
         detected_usdt = tx_info['usdt']  # Default to message amount
+        detected_usdt_bank = None
+        confidence = 0
         
-        if usdt_result and usdt_result['received_amount'] > 0:
-            detected_usdt = usdt_result['received_amount']
-            logger.info(f"Detected USDT RECEIVED from customer receipt: {detected_usdt:.4f} (fee: {usdt_result['network_fee']:.4f} paid by customer)")
+        if usdt_match_result and usdt_match_result['amount'] > 0:
+            detected_usdt = usdt_match_result['amount']
+            
+            # Find the bank with highest confidence
+            banks_confidence = usdt_match_result.get('banks', {})
+            max_confidence = 0
+            max_bank_id = None
+            
+            for bank_id_str, conf in banks_confidence.items():
+                if conf > max_confidence:
+                    max_confidence = conf
+                    max_bank_id = int(bank_id_str)
+            
+            if max_bank_id and max_confidence > 0:
+                # Find the bank object
+                for bank in usdt_banks_for_ocr:
+                    if bank['bank_id'] == max_bank_id:
+                        detected_usdt_bank = bank
+                        confidence = max_confidence
+                        break
+            
+            logger.info(f"Detected USDT from customer receipt: {detected_usdt:.4f} to {detected_usdt_bank['bank_name'] if detected_usdt_bank else 'unknown'} (confidence: {confidence}%)")
             
             # Check for mismatch
             if tx_info['usdt'] and tx_info['usdt'] > 0:
                 if abs(detected_usdt - tx_info['usdt']) > max(0.5, tx_info['usdt'] * 0.01):
                     await send_status_message(
                         context,
-                        f"⚠️ <b>USDT Amount Mismatch Warning</b>\n\n"
-                        f"<b>Transaction:</b> Buy\n"
-                        f"<b>Sender:</b> @{sender_name}\n"
-                        f"<b>Expected (from message):</b> {tx_info['usdt']:.4f} USDT\n"
-                        f"<b>Detected (from OCR):</b> {detected_usdt:.4f} USDT\n"
-                        f"<b>Difference:</b> {abs(detected_usdt - tx_info['usdt']):.4f} USDT",
+                        f"⚠️ USDT Mismatch: Expected {tx_info['usdt']:.4f}, Detected {detected_usdt:.4f}",
                         parse_mode='HTML'
                     )
         else:
             logger.warning(f"Could not OCR USDT receipt, using message amount: {tx_info['usdt']:.4f}")
+        
+        if not detected_usdt_bank:
+            await send_alert(message, "❌ USDT wallet not recognized", context)
+            return
+        
+        # Warn if low confidence
+        if confidence < 50:
+            await send_status_message(
+                context,
+                f"⚠️ Low confidence: {detected_usdt_bank['bank_name']} ({confidence}%)",
+                parse_mode='HTML'
+            )
         
         # Store the sale message info for later when staff sends MMK receipt
         # No staff prefix required for sale message
@@ -1697,6 +2060,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         pending_transactions[sale_message_id] = {
             'type': 'buy',
             'detected_usdt': detected_usdt,
+            'detected_usdt_bank': detected_usdt_bank['bank_name'],
             'expected_mmk': tx_info['mmk'],
             'expected_usdt': tx_info['usdt'],
             'sender_id': user_id,
@@ -1710,19 +2074,15 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             receipt_index=0,
             transaction_type='buy',
             detected_amount=None,
-            detected_bank=None,
+            detected_bank=detected_usdt_bank['bank_name'] if detected_usdt_bank else None,
             detected_usdt=detected_usdt,
-            ocr_raw_data=None
+            ocr_raw_data={'confidence': confidence}
         )
         
         # Send notification
         await send_status_message(
             context,
-            f"📥 <b>Buy Transaction - USDT Receipt Processed</b>\n\n"
-            f"<b>Sender:</b> @{sender_name}\n"
-            f"<b>USDT Detected:</b> {detected_usdt:.4f}\n"
-            f"<b>Expected MMK:</b> {tx_info['mmk']:,.0f}\n\n"
-            f"⏳ Waiting for staff to send MMK receipt...",
+            f"📥 Buy: {detected_usdt:.4f} USDT → {detected_usdt_bank['bank_name']} | Waiting for MMK receipt",
             parse_mode='HTML'
         )
         
@@ -1731,15 +2091,16 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
     
     else:
         # CASE 2: This is STAFF REPLY with MMK receipt
-        # Staff MUST have a prefix set to process the reply
         logger.info(f"Buy: Processing as STAFF REPLY - photo is MMK receipt")
         
-        # Get staff prefix - REQUIRED for staff reply
+        # Get staff info (prefix not required anymore)
         user_prefix = get_user_prefix(user_id)
+        username = message.from_user.username or message.from_user.first_name or str(user_id)
         
+        # Use username if no prefix is set
         if not user_prefix:
-            await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-            return
+            user_prefix = username
+            logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
         
         # Get photo and OCR as MMK receipt
         photo = message.photo[-1]
@@ -1751,7 +2112,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         result = await ocr_detect_mmk_bank_and_amount(photo_base64, balances['mmk_banks'], user_prefix)
         
         if not result:
-            await send_alert(message, "❌ Could not detect bank/amount from MMK receipt", context)
+            await send_alert(message, "❌ Cannot read MMK receipt", context)
             return
         
         detected_mmk = result['amount']
@@ -1773,22 +2134,53 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         # First check if we have stored OCR data
         stored_ocr = get_sale_receipt_ocr(original_message_id)
         detected_usdt = tx_info['usdt']  # Default
+        detected_usdt_bank_name = None
         
         if stored_ocr and stored_ocr[0].get('detected_usdt'):
             detected_usdt = stored_ocr[0]['detected_usdt']
-            logger.info(f"Using pre-scanned USDT: {detected_usdt:.4f}")
+            detected_usdt_bank_name = stored_ocr[0].get('detected_bank')
+            logger.info(f"Using pre-scanned USDT: {detected_usdt:.4f} to {detected_usdt_bank_name}")
             delete_sale_receipt_ocr(original_message_id)
         elif original_message.photo:
-            # OCR the original USDT receipt - detect RECEIVED amount
+            # OCR the original USDT receipt - match to registered banks
             orig_photo = original_message.photo[-1]
             orig_file = await context.bot.get_file(orig_photo.file_id)
             orig_bytes = await orig_file.download_as_bytearray()
             orig_base64 = base64.b64encode(orig_bytes).decode('utf-8')
             
-            usdt_result = await ocr_extract_usdt_received(orig_base64)
-            if usdt_result and usdt_result['received_amount'] > 0:
-                detected_usdt = usdt_result['received_amount']
-                logger.info(f"Detected USDT RECEIVED from original receipt: {detected_usdt:.4f}")
+            # Get registered USDT banks
+            registered_usdt_banks = get_all_usdt_bank_accounts()
+            if registered_usdt_banks:
+                usdt_banks_for_ocr = []
+                for idx, bank in enumerate(registered_usdt_banks, 1):
+                    usdt_banks_for_ocr.append({
+                        'bank_id': idx,
+                        'bank_name': bank['bank_name'],
+                        'wallet_address': bank['wallet_address'],
+                        'network': bank['network']
+                    })
+                
+                usdt_match_result = await ocr_match_usdt_receipt_to_banks(orig_base64, usdt_banks_for_ocr)
+                if usdt_match_result and usdt_match_result['amount'] > 0:
+                    detected_usdt = usdt_match_result['amount']
+                    
+                    # Find the bank with highest confidence
+                    banks_confidence = usdt_match_result.get('banks', {})
+                    max_confidence = 0
+                    max_bank_id = None
+                    
+                    for bank_id_str, conf in banks_confidence.items():
+                        if conf > max_confidence:
+                            max_confidence = conf
+                            max_bank_id = int(bank_id_str)
+                    
+                    if max_bank_id:
+                        for bank in usdt_banks_for_ocr:
+                            if bank['bank_id'] == max_bank_id:
+                                detected_usdt_bank_name = bank['bank_name']
+                                break
+                    
+                    logger.info(f"Detected USDT from original receipt: {detected_usdt:.4f} to {detected_usdt_bank_name}")
         
         # Verify MMK amount
         if tx_info['mmk'] > 0 and abs(total_mmk - tx_info['mmk']) > max(1000, tx_info['mmk'] * 0.1):
@@ -1823,8 +2215,9 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
             await send_alert(message, f"❌ Bank not found: {detected_bank['bank_name']}", context)
             return
         
-        # Add USDT to receiving account
-        receiving_usdt_account = get_receiving_usdt_account()
+        # Add USDT to the detected receiving bank (from customer's receipt)
+        # If no bank detected, fall back to default receiving account
+        receiving_usdt_account = detected_usdt_bank_name if detected_usdt_bank_name else get_receiving_usdt_account()
         usdt_updated = False
         
         for bank in balances['usdt_banks']:
@@ -1835,7 +2228,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
                 break
         
         if not usdt_updated:
-            await send_alert(message, f"⚠️ USDT account '{receiving_usdt_account}' not found", context)
+            await send_alert(message, f"⚠️ USDT account '{receiving_usdt_account}' not found in balance", context)
         
         # Send new balance
         new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
@@ -1857,10 +2250,7 @@ async def process_buy_transaction(update: Update, context: ContextTypes.DEFAULT_
         # Send success message
         await send_status_message(
             context,
-            f"✅ <b>Buy Transaction Processed</b>\n\n"
-            f"<b>Staff:</b> {user_prefix}\n"
-            f"<b>MMK:</b> -{total_mmk:,.0f} ({detected_bank['bank_name']})\n"
-            f"<b>USDT:</b> +{detected_usdt:.4f} ({receiving_usdt_account})",
+            f"✅ Buy: -{total_mmk:,.0f} MMK ({detected_bank['bank_name']}) | +{detected_usdt:.4f} USDT ({receiving_usdt_account})",
             parse_mode='HTML'
         )
         
@@ -2157,20 +2547,21 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     
     elif not current_has_photo:
         # No photos in current message
-        await send_alert(message, "❌ No receipt photo attached", context)
+        await send_alert(message, "❌ No receipt", context)
         return
     
     # CASE 2: This is STAFF REPLY with USDT receipts (original has photos or we have stored data)
-    # Staff MUST have a prefix set to process the reply
     logger.info(f"Sell: Processing as STAFF REPLY - photo is USDT receipt")
     
-    # Get staff prefix - REQUIRED for staff reply
+    # Get staff info (prefix not required anymore)
     user_id = message.from_user.id
     user_prefix = get_user_prefix(user_id)
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
     
+    # Use username if no prefix is set
     if not user_prefix:
-        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-        return
+        user_prefix = username
+        logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
     
     original_message_id = original_message.message_id if original_message else message.message_id
     media_group_id = original_message.media_group_id if original_message else None
@@ -2253,50 +2644,105 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
             user_bytes = await user_file.download_as_bytearray()
             photo_data_list = [(original_message_id, bytes(user_bytes))]
         
-        # OCR all user's receipts and sum amounts - use multi-bank detection (not staff-specific)
-        for idx, photo_data in enumerate(photo_data_list, 1):
-            msg_id, data = photo_data
-            logger.info(f"Processing MMK receipt {idx}/{len(photo_data_list)}")
+        # If staff specified a bank in text, only extract amount from receipts (don't detect bank)
+        if specified_bank:
+            logger.info(f"Bank specified in text - only extracting amounts from receipts")
             
-            # Data can be either file_path (string) or bytes
-            if isinstance(data, str):
-                with open(data, 'rb') as f:
-                    photo_bytes = f.read()
-                user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
-            else:
-                user_base64 = base64.b64encode(data).decode('utf-8')
-            
-            # Use multi-bank detection for SELL transactions (not staff-specific)
-            user_result = await ocr_detect_mmk_bank_multi(user_base64, balances['mmk_banks'])
-            
-            if not user_result or not user_result['amount']:
-                logger.warning(f"Could not process MMK receipt {idx}")
-                continue
-            
-            receipt_mmk = user_result['amount']
-            total_detected_mmk += receipt_mmk
-            receipt_count += 1
-            
-            if not detected_bank and user_result['bank']:
-                detected_bank = user_result['bank']
-            
-            logger.info(f"MMK receipt {idx}: {receipt_mmk:,.0f} MMK from {user_result['bank']['bank_name'] if user_result['bank'] else 'unknown'} (confidence: {user_result.get('confidence', 0)}%)")
+            for idx, photo_data in enumerate(photo_data_list, 1):
+                msg_id, data = photo_data
+                logger.info(f"Processing MMK receipt {idx}/{len(photo_data_list)} (amount only)")
+                
+                # Data can be either file_path (string) or bytes
+                if isinstance(data, str):
+                    with open(data, 'rb') as f:
+                        photo_bytes = f.read()
+                    user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
+                else:
+                    user_base64 = base64.b64encode(data).decode('utf-8')
+                
+                # Use OCR to extract only amount (not bank detection)
+                user_result = await ocr_detect_mmk_bank_multi(user_base64, balances['mmk_banks'])
+                
+                if not user_result or not user_result['amount']:
+                    logger.warning(f"Could not extract amount from MMK receipt {idx}")
+                    continue
+                
+                receipt_mmk = user_result['amount']
+                total_detected_mmk += receipt_mmk
+                receipt_count += 1
+                
+                # Use the specified bank instead of detected bank
+                if not detected_bank:
+                    detected_bank = specified_bank
+                
+                logger.info(f"MMK receipt {idx}: {receipt_mmk:,.0f} MMK (using specified bank: {specified_bank['bank_name']})")
+        else:
+            # Original logic - detect bank from OCR
+            for idx, photo_data in enumerate(photo_data_list, 1):
+                msg_id, data = photo_data
+                logger.info(f"Processing MMK receipt {idx}/{len(photo_data_list)}")
+                
+                # Data can be either file_path (string) or bytes
+                if isinstance(data, str):
+                    with open(data, 'rb') as f:
+                        photo_bytes = f.read()
+                    user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
+                else:
+                    user_base64 = base64.b64encode(data).decode('utf-8')
+                
+                # Use multi-bank detection for SELL transactions (not staff-specific)
+                user_result = await ocr_detect_mmk_bank_multi(user_base64, balances['mmk_banks'])
+                
+                if not user_result or not user_result['amount']:
+                    logger.warning(f"Could not process MMK receipt {idx}")
+                    continue
+                
+                receipt_mmk = user_result['amount']
+                total_detected_mmk += receipt_mmk
+                receipt_count += 1
+                
+                if not detected_bank and user_result['bank']:
+                    detected_bank = user_result['bank']
+                
+                logger.info(f"MMK receipt {idx}: {receipt_mmk:,.0f} MMK from {user_result['bank']['bank_name'] if user_result['bank'] else 'unknown'} (confidence: {user_result.get('confidence', 0)}%)")
     
     if receipt_count == 0 or not detected_bank:
-        await send_alert(message, "❌ Could not detect bank/amount from user receipt(s). Make sure the receipt matches one of the registered MMK bank accounts.", context)
+        await send_alert(message, "❌ Cannot read receipt", context)
         if media_group_id_to_cleanup:
             delete_media_group_photos(media_group_id_to_cleanup)
         return
     
     logger.info(f"Total MMK from {receipt_count} receipt(s): {total_detected_mmk:,.0f} MMK")
     
-    # Check if staff reply contains fee (format: fee-3039)
+    # Check if staff reply contains fee (format: fee-3039) and bank specification (format: From San(Kpay P))
     staff_reply_text = message.text or message.caption or ""
     mmk_fee = 0
+    specified_bank = None
+    
     fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_reply_text, re.IGNORECASE)
     if fee_match:
         mmk_fee = float(fee_match.group(1).replace(',', ''))
         logger.info(f"Detected MMK fee in staff reply: {mmk_fee:,.0f} MMK")
+    
+    # Check for bank specification in format: From San(Kpay P)
+    bank_match = re.search(r'From\s+([^(]+)\(([^)]+)\)', staff_reply_text, re.IGNORECASE)
+    if bank_match:
+        prefix = bank_match.group(1).strip()
+        bank_name = bank_match.group(2).strip()
+        specified_bank_name = f"{prefix}({bank_name})"
+        
+        # Find the matching bank in balances
+        for bank in balances['mmk_banks']:
+            if banks_match(bank['bank_name'], specified_bank_name):
+                specified_bank = bank
+                logger.info(f"Staff specified bank: {specified_bank_name} -> matched {bank['bank_name']}")
+                break
+        
+        if not specified_bank:
+            await send_alert(message, f"❌ Specified bank '{specified_bank_name}' not found in registered MMK banks", context)
+            if media_group_id_to_cleanup:
+                delete_media_group_photos(media_group_id_to_cleanup)
+            return
     
     # Add fee to detected MMK amount
     total_mmk = total_detected_mmk + mmk_fee
@@ -2328,7 +2774,7 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     usdt_result = await ocr_extract_usdt_with_fee(staff_base64)
     
     if not usdt_result:
-        await send_alert(message, "❌ Could not detect USDT amount from receipt", context)
+        await send_alert(message, "❌ Cannot read USDT receipt", context)
         if media_group_id_to_cleanup:
             delete_media_group_photos(media_group_id_to_cleanup)
         return
@@ -2398,13 +2844,11 @@ async def process_sell_transaction(update: Update, context: ContextTypes.DEFAULT
     elif receipt_count > 1:
         mmk_display += f" ({receipt_count} receipts)"
     
+    bank_source = " (specified in text)" if specified_bank else ""
+    
     await send_status_message(
         context,
-        f"✅ <b>Sell Transaction Processed</b>\n\n"
-        f"<b>Staff:</b> {user_prefix}\n"
-        f"<b>MMK:</b> +{mmk_display} ({detected_bank['bank_name']})\n"
-        f"<b>USDT:</b> -{detected_usdt:.4f} ({expected_bank_name})\n"
-        f"<b>Bank Type:</b> {bank_type}",
+        f"✅ Sell: +{mmk_display} ({detected_bank['bank_name']}{bank_source}) | -{detected_usdt:.4f} USDT",
         parse_mode='HTML'
     )
     
@@ -2512,15 +2956,7 @@ async def process_coin_transfer(update: Update, context: ContextTypes.DEFAULT_TY
         # Send success message to alert topic
         await send_status_message(
             context,
-            f"✅ <b>Coin Transfer Processed</b>\n\n"
-            f"<b>From:</b> {from_full_name}\n"
-            f"<b>To:</b> {to_full_name}\n"
-            f"<b>Sent:</b> {sent_amount:.4f} USDT\n"
-            f"<b>Fee:</b> {fee_amount:.4f} USDT\n"
-            f"<b>Received:</b> {received_amount:.4f} USDT\n\n"
-            f"<b>New Balances:</b>\n"
-            f"{from_full_name}: {from_bank_obj['amount']:.4f} USDT\n"
-            f"{to_full_name}: {to_bank_obj['amount']:.4f} USDT",
+            f"✅ Transfer: {from_full_name} → {to_full_name} | {received_amount:.4f} USDT",
             parse_mode='HTML'
         )
         
@@ -2847,6 +3283,22 @@ async def process_media_group_delayed(update: Update, context: ContextTypes.DEFA
     # Extract transaction info
     tx_info = extract_transaction_info(original_text)
     
+    # Check for staff P2P sell format first (no OCR needed)
+    if tx_info.get('type') == 'staff_p2p_sell':
+        logger.info(f"Staff P2P Sell detected in media group - processing without OCR")
+        try:
+            await process_staff_p2p_sell(update, context, tx_info)
+        except Exception as e:
+            logger.error(f"Error processing staff P2P sell: {e}")
+            logger.error(traceback.format_exc())
+        finally:
+            # Clean up media group
+            if media_group_id in media_groups:
+                del media_groups[media_group_id]
+            if media_group_id in media_group_locks:
+                del media_group_locks[media_group_id]
+        return
+    
     # Check if transaction type is valid (Buy or Sell)
     if not tx_info['type']:
         logger.info(f"❌ Original message is not a Buy/Sell transaction")
@@ -2981,15 +3433,16 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
     
     else:
         # CASE 2: This is STAFF REPLY with MMK receipts
-        # Staff MUST have a prefix set to process the reply
         logger.info(f"Buy (Bulk): Processing as STAFF REPLY - photos are MMK receipts")
         
-        # Get staff prefix - REQUIRED for staff reply
+        # Get staff info (prefix not required anymore)
         user_prefix = get_user_prefix(user_id)
+        username = message.from_user.username or message.from_user.first_name or str(user_id)
         
+        # Use username if no prefix is set
         if not user_prefix:
-            await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-            return
+            user_prefix = username
+            logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
         
         # Check for MMK fee
         staff_reply_text = message.text or message.caption or ""
@@ -3026,14 +3479,17 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         
         total_mmk = total_detected_mmk + mmk_fee
         
-        # Get USDT amount from original message
+        # Get USDT amount and bank from original message (sale message)
+        # First check if we have stored OCR data
         original_message_id = original_message.message_id
         stored_ocr = get_sale_receipt_ocr(original_message_id)
-        detected_usdt = tx_info['usdt']
+        detected_usdt = tx_info['usdt']  # Default
+        detected_usdt_bank_name = None
         
         if stored_ocr and stored_ocr[0].get('detected_usdt'):
             detected_usdt = stored_ocr[0]['detected_usdt']
-            logger.info(f"Using pre-scanned USDT: {detected_usdt:.4f}")
+            detected_usdt_bank_name = stored_ocr[0].get('detected_bank')
+            logger.info(f"Using pre-scanned USDT: {detected_usdt:.4f} to {detected_usdt_bank_name}")
             delete_sale_receipt_ocr(original_message_id)
         elif original_message.photo:
             # OCR the original USDT receipt - detect RECEIVED amount
@@ -3079,8 +3535,64 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
             await send_alert(message, f"❌ Bank not found: {detected_bank['bank_name']}", context)
             return
         
-        # Add USDT to receiving account
-        receiving_usdt_account = get_receiving_usdt_account()
+        # Add USDT to the detected receiving bank (from customer's receipt)
+        # First check if we have stored OCR data with detected bank
+        detected_usdt_bank_name = None
+        if stored_ocr and stored_ocr[0].get('detected_bank'):
+            detected_usdt_bank_name = stored_ocr[0]['detected_bank']
+            logger.info(f"Using pre-scanned USDT bank: {detected_usdt_bank_name}")
+        
+        # If no detected bank, try to OCR original message to find the bank
+        if not detected_usdt_bank_name and original_message.photo:
+            # Get registered USDT banks
+            registered_usdt_banks = get_all_usdt_bank_accounts()
+            if registered_usdt_banks:
+                usdt_banks_for_ocr = []
+                for idx, bank in enumerate(registered_usdt_banks, 1):
+                    usdt_banks_for_ocr.append({
+                        'bank_id': idx,
+                        'bank_name': bank['bank_name'],
+                        'wallet_address': bank['wallet_address'],
+                        'network': bank['network']
+                    })
+                
+                orig_photo = original_message.photo[-1]
+                orig_file = await context.bot.get_file(orig_photo.file_id)
+                orig_bytes = await orig_file.download_as_bytearray()
+                orig_base64 = base64.b64encode(orig_bytes).decode('utf-8')
+                
+                usdt_match_result = await ocr_match_usdt_receipt_to_banks(orig_base64, usdt_banks_for_ocr)
+                if usdt_match_result:
+                    # Find the bank with highest confidence
+                    banks_confidence = usdt_match_result.get('banks', {})
+                    max_confidence = 0
+                    max_bank_id = None
+                    
+                    for bank_id_str, conf in banks_confidence.items():
+                        if conf > max_confidence:
+                            max_confidence = conf
+                            max_bank_id = int(bank_id_str)
+                    
+                    if max_bank_id:
+                        for bank in usdt_banks_for_ocr:
+                            if bank['bank_id'] == max_bank_id:
+                                detected_usdt_bank_name = bank['bank_name']
+                                logger.info(f"Detected USDT bank from original receipt: {detected_usdt_bank_name}")
+                                break
+        
+        # Use detected bank or fall back to first available USDT bank
+        receiving_usdt_account = detected_usdt_bank_name
+        if not receiving_usdt_account:
+            # Find first available USDT bank as fallback
+            for bank in balances['usdt_banks']:
+                receiving_usdt_account = bank['bank_name']
+                logger.info(f"No USDT bank detected, using first available: {receiving_usdt_account}")
+                break
+        
+        if not receiving_usdt_account:
+            await send_alert(message, "❌ No USDT banks available in balance", context)
+            return
+        
         usdt_updated = False
         
         for bank in balances['usdt_banks']:
@@ -3113,11 +3625,7 @@ async def process_buy_transaction_bulk(update: Update, context: ContextTypes.DEF
         # Send success message
         await send_status_message(
             context,
-            f"✅ <b>Buy Transaction Processed (Bulk)</b>\n\n"
-            f"<b>Staff:</b> {user_prefix}\n"
-            f"<b>MMK:</b> -{total_mmk:,.0f} ({detected_bank['bank_name']})\n"
-            f"<b>USDT:</b> +{detected_usdt:.4f} ({receiving_usdt_account})\n"
-            f"<b>MMK Receipts:</b> {len(photos)}",
+            f"✅ Buy: -{total_mmk:,.0f} MMK ({detected_bank['bank_name']}) | +{detected_usdt:.4f} USDT ({receiving_usdt_account})",
             parse_mode='HTML'
         )
         
@@ -3266,15 +3774,17 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
     
     else:
         # CASE 2: Staff is sending USDT receipts as reply to sale message
-        # Staff MUST have a prefix set to process the reply
         logger.info(f"Sell (Bulk): Processing as STAFF REPLY - photos are USDT receipts")
         
-        # Get staff prefix - REQUIRED for staff reply
+        # Get staff info (prefix not required anymore)
+        user_id = message.from_user.id
         user_prefix = get_user_prefix(user_id)
+        username = message.from_user.username or message.from_user.first_name or str(user_id)
         
+        # Use username if no prefix is set
         if not user_prefix:
-            await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-            return
+            user_prefix = username
+            logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
         
         # First, get MMK info from original message
         original_message_id = original_message.message_id
@@ -3329,25 +3839,52 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
                 user_bytes = await user_file.download_as_bytearray()
                 mmk_photo_data_list = [(original_message_id, bytes(user_bytes))]
             
-            # OCR all MMK receipts
-            for idx, photo_data in enumerate(mmk_photo_data_list, 1):
-                msg_id, data = photo_data
-                logger.info(f"Processing MMK receipt {idx}/{len(mmk_photo_data_list)}")
+            # If staff specified a bank in text, only extract amount from receipts (don't detect bank)
+            if specified_bank:
+                logger.info(f"Bank specified in text - only extracting amounts from receipts")
                 
-                if isinstance(data, str):
-                    with open(data, 'rb') as f:
-                        photo_bytes = f.read()
-                    user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
-                else:
-                    user_base64 = base64.b64encode(data).decode('utf-8')
-                
-                mmk_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
-                
-                if mmk_result and mmk_result['amount']:
-                    total_detected_mmk += mmk_result['amount']
-                    mmk_receipt_count += 1
-                    if not detected_bank and mmk_result['bank']:
-                        detected_bank = mmk_result['bank']
+                for idx, photo_data in enumerate(mmk_photo_data_list, 1):
+                    msg_id, data = photo_data
+                    logger.info(f"Processing MMK receipt {idx}/{len(mmk_photo_data_list)} (amount only)")
+                    
+                    if isinstance(data, str):
+                        with open(data, 'rb') as f:
+                            photo_bytes = f.read()
+                        user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
+                    else:
+                        user_base64 = base64.b64encode(data).decode('utf-8')
+                    
+                    mmk_result = await ocr_detect_mmk_bank_multi(user_base64, balances['mmk_banks'])
+                    
+                    if mmk_result and mmk_result['amount']:
+                        total_detected_mmk += mmk_result['amount']
+                        mmk_receipt_count += 1
+                        if not detected_bank:
+                            detected_bank = specified_bank
+                        logger.info(f"MMK receipt {idx}: {mmk_result['amount']:,.0f} MMK (using specified bank: {specified_bank['bank_name']})")
+            else:
+                # Original logic - detect bank from OCR
+                for idx, photo_data in enumerate(mmk_photo_data_list, 1):
+                    msg_id, data = photo_data
+                    logger.info(f"Processing MMK receipt {idx}/{len(mmk_photo_data_list)}")
+                    
+                    if isinstance(data, str):
+                        with open(data, 'rb') as f:
+                            photo_bytes = f.read()
+                        user_base64 = base64.b64encode(photo_bytes).decode('utf-8')
+                    else:
+                        user_base64 = base64.b64encode(data).decode('utf-8')
+                    
+                    mmk_result = await ocr_detect_mmk_bank_and_amount(user_base64, balances['mmk_banks'], user_prefix)
+                    
+                    if mmk_result and mmk_result['amount']:
+                        total_detected_mmk += mmk_result['amount']
+                        mmk_receipt_count += 1
+                        if not detected_bank and mmk_result['bank']:
+                            detected_bank = mmk_result['bank']
+        
+        
+        total_mmk = total_detected_mmk + mmk_fee
         
         if mmk_receipt_count == 0 or not detected_bank:
             await send_alert(message, "❌ Could not detect MMK bank/amount from sale receipt(s)", context)
@@ -3355,13 +3892,32 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
                 delete_media_group_photos(media_group_id_to_cleanup)
             return
         
-        # Check for MMK fee in staff reply
+        # Check for MMK fee in staff reply and bank specification
         staff_text = message.text or message.caption or ""
         fee_match = re.search(r'fee\s*-\s*([\d,]+(?:\.\d+)?)', staff_text, re.IGNORECASE)
         if fee_match:
             mmk_fee = float(fee_match.group(1).replace(',', ''))
         
-        total_mmk = total_detected_mmk + mmk_fee
+        # Check for bank specification in format: From San(Kpay P)
+        specified_bank = None
+        bank_match = re.search(r'From\s+([^(]+)\(([^)]+)\)', staff_text, re.IGNORECASE)
+        if bank_match:
+            prefix = bank_match.group(1).strip()
+            bank_name = bank_match.group(2).strip()
+            specified_bank_name = f"{prefix}({bank_name})"
+            
+            # Find the matching bank in balances
+            for bank in balances['mmk_banks']:
+                if banks_match(bank['bank_name'], specified_bank_name):
+                    specified_bank = bank
+                    logger.info(f"Staff specified bank: {specified_bank_name} -> matched {bank['bank_name']}")
+                    break
+            
+            if not specified_bank:
+                await send_alert(message, f"❌ Specified bank '{specified_bank_name}' not found in registered MMK banks", context)
+                if media_group_id_to_cleanup:
+                    delete_media_group_photos(media_group_id_to_cleanup)
+                return
         
         # Now process USDT receipts (the photos in current message)
         total_detected_usdt = 0
@@ -3447,14 +4003,11 @@ async def process_sell_transaction_bulk(update: Update, context: ContextTypes.DE
         context.chat_data['balances'] = balances
         
         # Send success message
+        bank_source = " (specified in text)" if specified_bank else ""
+        
         await send_status_message(
             context,
-            f"✅ <b>Sell Transaction Processed (Bulk)</b>\n\n"
-            f"<b>Staff:</b> {user_prefix}\n"
-            f"<b>MMK:</b> +{total_mmk:,.0f} ({detected_bank['bank_name']})\n"
-            f"<b>USDT:</b> -{total_detected_usdt:.4f} ({expected_bank_name})\n"
-            f"<b>MMK Receipts:</b> {mmk_receipt_count}\n"
-            f"<b>USDT Receipts:</b> {len(photos)}",
+            f"✅ Sell: +{total_mmk:,.0f} MMK ({detected_bank['bank_name']}{bank_source}) | -{total_detected_usdt:.4f} USDT",
             parse_mode='HTML'
         )
 
@@ -3479,13 +4032,15 @@ async def process_p2p_sell_with_breakdown(update: Update, context: ContextTypes.
         await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
         return
     
-    # Get staff prefix - REQUIRED for P2P sell
+    # Get staff info (prefix not required anymore)
     user_id = message.from_user.id
     user_prefix = get_user_prefix(user_id)
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
     
+    # Use username if no prefix is set
     if not user_prefix:
-        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-        return
+        user_prefix = username
+        logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
     
     bank_breakdown = tx_info.get('bank_breakdown', [])
     if not bank_breakdown:
@@ -3609,6 +4164,97 @@ async def process_p2p_sell_with_breakdown(update: Update, context: ContextTypes.
     )
 
 
+async def process_staff_p2p_sell(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict):
+    """Staff P2P SELL with direct bank transfer (no OCR needed)
+    
+    Format: P2P Sell 440.18x4021 =17700001770000 to OKM (KBZ)From OKM(Swift)
+    
+    Process:
+    1. Add MMK to destination bank
+    2. Subtract USDT from source bank
+    """
+    message = update.message
+    balances = context.chat_data.get('balances')
+    
+    if not balances:
+        await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
+        return
+    
+    # Get staff info
+    user_id = message.from_user.id
+    user_prefix = get_user_prefix(user_id)
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    
+    if not user_prefix:
+        user_prefix = username
+        logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
+    
+    dest_bank_name = tx_info['dest_bank']
+    src_bank_name = tx_info['src_bank']
+    mmk_amount = tx_info['mmk']
+    usdt_amount = tx_info['usdt']
+    
+    # Find and update destination MMK bank (add MMK)
+    mmk_updated = False
+    for bank in balances['mmk_banks']:
+        if banks_match(bank['bank_name'], dest_bank_name):
+            bank['amount'] += mmk_amount
+            mmk_updated = True
+            logger.info(f"Staff P2P Sell: Added {mmk_amount:,.0f} MMK to {bank['bank_name']}")
+            break
+    
+    if not mmk_updated:
+        await send_alert(message, f"❌ Destination MMK bank '{dest_bank_name}' not found", context)
+        return
+    
+    # Find and update source USDT bank (subtract USDT)
+    usdt_updated = False
+    for bank in balances['usdt_banks']:
+        if banks_match(bank['bank_name'], src_bank_name):
+            if bank['amount'] < usdt_amount:
+                await send_alert(message, 
+                    f"❌ Insufficient USDT in {bank['bank_name']}: "
+                    f"Available: {bank['amount']:.4f} USDT, "
+                    f"Required: {usdt_amount:.4f} USDT, "
+                    f"Shortage: {usdt_amount - bank['amount']:.4f} USDT",
+                    context)
+                return
+            bank['amount'] -= usdt_amount
+            usdt_updated = True
+            logger.info(f"Staff P2P Sell: Reduced {usdt_amount:.4f} USDT from {bank['bank_name']}")
+            break
+    
+    if not usdt_updated:
+        await send_alert(message, f"❌ Source USDT bank '{src_bank_name}' not found", context)
+        return
+    
+    # Send new balance
+    new_balance = format_balance_message(balances['mmk_banks'], balances['usdt_banks'], balances.get('thb_banks', []))
+    
+    if AUTO_BALANCE_TOPIC_ID:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            message_thread_id=AUTO_BALANCE_TOPIC_ID,
+            text=new_balance
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=TARGET_GROUP_ID,
+            text=new_balance
+        )
+    
+    context.chat_data['balances'] = balances
+    
+    # Send success message
+    await send_status_message(
+        context,
+        f"✅ <b>P2P Sell Transaction Processed</b>\n\n"
+        f"<b>MMK:</b> +{mmk_amount:,.0f} MMK to {dest_bank_name}\n"
+        f"<b>USDT:</b> -{usdt_amount:.4f} USDT from {src_bank_name}",
+        parse_mode='HTML'
+    )
+
+
 async def process_p2p_sell_with_photos(update: Update, context: ContextTypes.DEFAULT_TYPE, tx_info: dict, photos: list):
     """P2P SELL with photos already collected in memory
     
@@ -3630,13 +4276,15 @@ async def process_p2p_sell_with_photos(update: Update, context: ContextTypes.DEF
         await send_alert(message, "❌ Balance not loaded. Post balance message in auto balance topic first.", context)
         return
     
-    # Get staff prefix - REQUIRED for P2P sell
+    # Get staff info (prefix not required anymore)
     user_id = message.from_user.id
     user_prefix = get_user_prefix(user_id)
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
     
+    # Use username if no prefix is set
     if not user_prefix:
-        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-        return
+        user_prefix = username
+        logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
     
     # Process all photos - use STAFF-SPECIFIC bank detection for P2P sell
     total_detected_mmk = 0
@@ -3811,13 +4459,15 @@ async def process_p2p_sell_transaction(update: Update, context: ContextTypes.DEF
         await send_alert(message, "❌ No MMK receipt photo", context)
         return
     
-    # Get staff prefix - REQUIRED for P2P sell
+    # Get staff info (prefix not required anymore)
     user_id = message.from_user.id
     user_prefix = get_user_prefix(user_id)
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
     
+    # Use username if no prefix is set
     if not user_prefix:
-        await send_alert(message, "❌ You don't have a prefix set. Admin needs to use /set_user command.", context)
-        return
+        user_prefix = username
+        logger.info(f"No prefix set for user {user_id}, using username: {user_prefix}")
     
     # Check if this is a media group (multiple receipts)
     is_media_group = message.media_group_id is not None
@@ -4532,7 +5182,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # P2P sell can be either direct post OR a reply, but must have "fee" in the message
     # For media groups, we need to wait for all photos before processing
     # If bank breakdown is specified in message, no photos/OCR needed
+    # Staff P2P sell format doesn't need "fee" keyword
     current_message_text = message.text or message.caption or ""
+    
+    # Check for staff P2P sell format first (no photos needed)
+    if current_message_text.strip().lower().startswith('p2p sell'):
+        tx_info = extract_transaction_info(current_message_text)
+        if tx_info.get('type') == 'staff_p2p_sell':
+            logger.info(f"   🔄 Processing Staff P2P SELL transaction: {tx_info['usdt']} USDT -> +{tx_info['mmk']:,.0f} MMK")
+            await process_staff_p2p_sell(update, context, tx_info)
+            return
+    
     if 'fee' in current_message_text.lower():
         logger.info(f"   🔍 Detected P2P sell format (fee in message)")
         tx_info = extract_transaction_info(current_message_text)
@@ -4698,6 +5358,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message.media_group_id:
         logger.info(f"   📸 Staff media group detected: {message.media_group_id}")
         
+        # Check for staff P2P sell format first (no OCR needed even with photos)
+        staff_text = message.text or message.caption or ""
+        original_text = message.reply_to_message.text or message.reply_to_message.caption if message.reply_to_message else ""
+        
+        # Check both staff text and original text for staff P2P sell format
+        for text_to_check in [staff_text, original_text]:
+            if text_to_check and text_to_check.strip().lower().startswith('p2p sell'):
+                tx_info = extract_transaction_info(text_to_check)
+                if tx_info.get('type') == 'staff_p2p_sell':
+                    logger.info(f"   🔄 Processing Staff P2P SELL transaction (with photos): {tx_info['usdt']} USDT -> +{tx_info['mmk']:,.0f} MMK")
+                    await process_staff_p2p_sell(update, context, tx_info)
+                    return
+        
         # Initialize media group storage if not exists
         if message.media_group_id not in media_groups:
             # Get original_text from the first photo's caption or reply message
@@ -4806,6 +5479,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list_mmk_bank - List all registered banks\n"
         "/edit_mmk_bank - Edit existing bank account\n"
         "/remove_mmk_bank - Remove bank account\n\n"
+        "<b>USDT Bank Management:</b>\n"
+        "/set_usdt_bank - Register USDT wallet account\n"
+        "/list_usdt_banks - List all registered USDT wallets\n"
+        "/edit_usdt_bank - Edit existing USDT wallet\n"
+        "/remove_usdt_bank - Remove USDT wallet\n\n"
         "<b>System:</b>\n"
         "/test - Test connection and configuration",
         parse_mode='HTML'
@@ -5373,6 +6051,244 @@ async def show_receiving_usdt_acc_command(update: Update, context: ContextTypes.
     
     await send_command_response(context, message, parse_mode='HTML')
 
+async def list_usdt_banks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all registered USDT bank accounts"""
+    accounts = get_all_usdt_bank_accounts()
+    
+    if not accounts:
+        message = (
+            "💰 <b>No USDT Banks Registered</b>\n\n"
+            "Use /set_usdt_bank to add USDT receiving wallets.\n\n"
+            "<b>Example:</b>\n"
+            "<code>/set_usdt_bank ACT(BNB) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | BNB Wallet</code>"
+        )
+    else:
+        account_list = []
+        for idx, acc in enumerate(accounts, 1):
+            # Truncate long wallet addresses for display
+            wallet = acc['wallet_address']
+            if len(wallet) > 20:
+                wallet_display = f"{wallet[:10]}...{wallet[-10:]}"
+            else:
+                wallet_display = wallet
+            
+            account_list.append(
+                f"{idx}. <b>{acc['bank_name']}</b>\n"
+                f"   Network: {acc['network']}\n"
+                f"   Wallet: <code>{wallet_display}</code>"
+            )
+        
+        accounts_text = "\n\n".join(account_list)
+        
+        message = (
+            f"💰 <b>Registered USDT Banks ({len(accounts)})</b>\n\n"
+            f"{accounts_text}\n\n"
+            "<b>Commands:</b>\n"
+            "• /set_usdt_bank - Add/update USDT bank\n"
+            "• /edit_usdt_bank - Edit existing USDT bank\n"
+            "• /remove_usdt_bank - Remove USDT bank\n\n"
+            "<b>Note:</b> These wallets are used to verify customer USDT receipts in buy transactions."
+        )
+    
+    await send_command_response(context, message, parse_mode='HTML')
+
+async def set_usdt_bank_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set USDT bank account details for receiving USDT
+    Usage: /set_usdt_bank ACT(BNB) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | BNB Wallet
+    """
+    message = update.message
+    
+    if len(context.args) < 1:
+        # Show usage
+        await send_command_response(context, 
+            "💰 <b>Add/Update USDT Bank</b>\n\n"
+            "<b>Usage:</b>\n"
+            "/set_usdt_bank &lt;bank_name&gt; | &lt;wallet_address&gt; | &lt;network&gt;\n\n"
+            "<b>Examples:</b>\n"
+            "<code>/set_usdt_bank ACT(BNB) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | BNB Wallet</code>\n"
+            "<code>/set_usdt_bank ACT(Tron) | TCFKANz7vhaMLtxjTSYSZRRGdVivNNPDEy | Tron Wallet</code>\n"
+            "<code>/set_usdt_bank ACT(ETH) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | ETH Wallet</code>\n\n"
+            "<b>Note:</b> Use | (pipe) to separate fields",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Join all args and split by |
+    full_text = ' '.join(context.args)
+    parts = [p.strip() for p in full_text.split('|')]
+    
+    if len(parts) != 3:
+        await send_command_response(context, 
+            "❌ <b>Invalid Format</b>\n\n"
+            "Please use: /set_usdt_bank &lt;bank_name&gt; | &lt;wallet_address&gt; | &lt;network&gt;\n\n"
+            "<b>Example:</b>\n"
+            "<code>/set_usdt_bank ACT(BNB) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | BNB Wallet</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    bank_name, wallet_address, network = parts
+    
+    if not bank_name or not wallet_address or not network:
+        await send_command_response(context, 
+            "❌ All fields are required: bank_name, wallet_address, network",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Save to database
+    set_usdt_bank_account(bank_name, wallet_address, network)
+    
+    # Truncate wallet for display
+    if len(wallet_address) > 20:
+        wallet_display = f"{wallet_address[:10]}...{wallet_address[-10:]}"
+    else:
+        wallet_display = wallet_address
+    
+    await send_command_response(context, 
+        f"✅ <b>USDT Bank Saved!</b>\n\n"
+        f"<b>Bank:</b> {bank_name}\n"
+        f"<b>Wallet:</b> <code>{wallet_display}</code>\n"
+        f"<b>Network:</b> {network}\n\n"
+        f"This wallet will be used to verify customer USDT receipts in buy transactions.",
+        parse_mode='HTML'
+    )
+
+async def edit_usdt_bank_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Edit existing USDT bank account details
+    Usage: /edit_usdt_bank ACT(BNB) | NEW_WALLET | NEW_NETWORK
+    """
+    message = update.message
+    
+    if len(context.args) < 1:
+        # Show current banks
+        accounts = get_all_usdt_bank_accounts()
+        if accounts:
+            account_list = "\n".join([
+                f"• <code>{acc['bank_name']}</code>"
+                for acc in accounts
+            ])
+            await send_command_response(context, 
+                f"💰 <b>Edit USDT Bank</b>\n\n"
+                f"<b>Current Banks:</b>\n{account_list}\n\n"
+                f"<b>Usage:</b>\n"
+                f"/edit_usdt_bank &lt;bank_name&gt; | &lt;new_wallet&gt; | &lt;new_network&gt;\n\n"
+                f"<b>Example:</b>\n"
+                f"<code>/edit_usdt_bank ACT(BNB) | 0xNEWADDRESS | BNB Wallet</code>",
+                parse_mode='HTML'
+            )
+        else:
+            await send_command_response(context, 
+                "💰 <b>No USDT Banks Registered</b>\n\n"
+                "Use /set_usdt_bank to add USDT banks first.",
+                parse_mode='HTML'
+            )
+        return
+    
+    # Join all args and split by |
+    full_text = ' '.join(context.args)
+    parts = [p.strip() for p in full_text.split('|')]
+    
+    if len(parts) != 3:
+        await send_command_response(context, 
+            "❌ <b>Invalid Format</b>\n\n"
+            "Please use: /edit_usdt_bank &lt;bank_name&gt; | &lt;new_wallet&gt; | &lt;new_network&gt;\n\n"
+            "<b>Example:</b>\n"
+            "<code>/edit_usdt_bank ACT(BNB) | 0xNEWADDRESS | BNB Wallet</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    bank_name, new_wallet, new_network = parts
+    
+    # Check if bank exists
+    existing = get_usdt_bank_account(bank_name)
+    if not existing:
+        await send_command_response(context, 
+            f"❌ <b>Bank Not Found</b>\n\n"
+            f"Bank <code>{bank_name}</code> does not exist.\n\n"
+            f"Use /list_usdt_banks to see all registered banks.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Update the bank
+    set_usdt_bank_account(bank_name, new_wallet, new_network)
+    
+    # Truncate wallet for display
+    if len(new_wallet) > 20:
+        wallet_display = f"{new_wallet[:10]}...{new_wallet[-10:]}"
+    else:
+        wallet_display = new_wallet
+    
+    await send_command_response(context, 
+        f"✅ <b>USDT Bank Updated!</b>\n\n"
+        f"<b>Bank:</b> {bank_name}\n"
+        f"<b>New Wallet:</b> <code>{wallet_display}</code>\n"
+        f"<b>New Network:</b> {new_network}",
+        parse_mode='HTML'
+    )
+
+async def remove_usdt_bank_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove USDT bank account
+    Usage: /remove_usdt_bank ACT(BNB)
+    """
+    message = update.message
+    
+    if len(context.args) < 1:
+        # Show current banks
+        accounts = get_all_usdt_bank_accounts()
+        if accounts:
+            account_list = "\n".join([
+                f"• <code>{acc['bank_name']}</code>"
+                for acc in accounts
+            ])
+            await send_command_response(context, 
+                f"💰 <b>Remove USDT Bank</b>\n\n"
+                f"<b>Current Banks:</b>\n{account_list}\n\n"
+                f"<b>Usage:</b>\n"
+                f"/remove_usdt_bank &lt;bank_name&gt;\n\n"
+                f"<b>Example:</b>\n"
+                f"<code>/remove_usdt_bank ACT(BNB)</code>",
+                parse_mode='HTML'
+            )
+        else:
+            await send_command_response(context, 
+                "💰 <b>No USDT Banks Registered</b>\n\n"
+                "Nothing to remove.",
+                parse_mode='HTML'
+            )
+        return
+    
+    bank_name = ' '.join(context.args)
+    
+    # Check if bank exists
+    existing = get_usdt_bank_account(bank_name)
+    if not existing:
+        await send_command_response(context, 
+            f"❌ <b>Bank Not Found</b>\n\n"
+            f"Bank <code>{bank_name}</code> does not exist.\n\n"
+            f"Use /list_usdt_banks to see all registered banks.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Remove the bank
+    success = remove_usdt_bank_account(bank_name)
+    
+    if success:
+        await send_command_response(context, 
+            f"✅ <b>USDT Bank Removed!</b>\n\n"
+            f"Bank <code>{bank_name}</code> has been removed from the system.",
+            parse_mode='HTML'
+        )
+    else:
+        await send_command_response(context, 
+            f"❌ <b>Failed to Remove Bank</b>\n\n"
+            f"Could not remove <code>{bank_name}</code>. Please try again.",
+            parse_mode='HTML'
+        )
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -5420,6 +6336,10 @@ def main():
     app.add_handler(CommandHandler("edit_mmk_bank", edit_mmk_bank_command))
     app.add_handler(CommandHandler("remove_mmk_bank", remove_mmk_bank_command))
     app.add_handler(CommandHandler("list_mmk_bank", list_mmk_bank_command))
+    app.add_handler(CommandHandler("list_usdt_banks", list_usdt_banks_command))
+    app.add_handler(CommandHandler("set_usdt_bank", set_usdt_bank_command))
+    app.add_handler(CommandHandler("edit_usdt_bank", edit_usdt_bank_command))
+    app.add_handler(CommandHandler("remove_usdt_bank", remove_usdt_bank_command))
     app.add_handler(CommandHandler("show_receiving_usdt_acc", show_receiving_usdt_acc_command))
     app.add_handler(CommandHandler("test", test_command))
     app.add_handler(MessageHandler(filters.ALL, handle_message))

@@ -104,6 +104,16 @@ Bot detects amount, transfers between accounts, and updates balance
 - `/load` - Load balance from message (reply to balance message)
 - `/set_user <prefix>` - Set user prefix (reply to user's message)
 - `/list_users` - List all user mappings
+- `/set_mmk_bank` - Add/update MMK bank account
+- `/edit_mmk_bank` - Edit existing MMK bank account
+- `/remove_mmk_bank` - Remove MMK bank account
+- `/list_mmk_bank` - List all MMK bank accounts
+- `/list_usdt_banks` - List all USDT receiving wallets
+- `/set_usdt_bank` - Add/update USDT receiving wallet
+- `/edit_usdt_bank` - Edit existing USDT wallet
+- `/remove_usdt_bank` - Remove USDT wallet
+- `/set_receiving_usdt_acc` - Set default USDT receiving account (legacy)
+- `/show_receiving_usdt_acc` - Show current USDT receiving account
 - `/test` - Test connection and configuration
 
 ## Testing
@@ -187,6 +197,31 @@ The bot uses SQLite (`bot_data.db`) to store:
 Database is automatically created on first run.
 
 ## New Features
+
+### Multiple USDT Receiving Wallets
+The bot now supports multiple USDT receiving wallets across different networks:
+- **BNB (BEP20)**: Binance Smart Chain
+- **ETH (ERC20)**: Ethereum network
+- **Tron (TRC20)**: Tron network
+- **SOL**: Solana network
+- **TON**: TON network
+
+When customers send USDT for buy transactions, the bot automatically:
+1. Detects which wallet received the payment
+2. Verifies the wallet address matches a registered wallet
+3. Identifies the network type (BNB vs ETH, etc.)
+4. Adds USDT to the correct wallet in the balance
+
+**Commands:**
+- `/list_usdt_banks` - View all registered wallets
+- `/set_usdt_bank <name> | <address> | <network>` - Add/update wallet
+- `/edit_usdt_bank <name> | <new_address> | <new_network>` - Edit wallet
+- `/remove_usdt_bank <name>` - Remove wallet
+
+**Example:**
+```
+/set_usdt_bank ACT(BNB) | 0x640e9AEde10B610834876cCc0ef2576C9469CB0e | BNB Wallet
+```
 
 ### USDT Tolerance
 - USDT transactions allow up to **0.03** difference for matching
