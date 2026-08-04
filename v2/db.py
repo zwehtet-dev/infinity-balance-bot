@@ -143,10 +143,14 @@ class Database:
                     value TEXT NOT NULL,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )""",
+            # bank_name is a DISPLAY label and may repeat: one balance line
+            # (e.g. "San(Kpay P)") can be fed by several physical accounts
+            # (a bank-transfer account + a mobile-app account). The unique
+            # identity of a registered account is its account_number.
             f"""CREATE TABLE IF NOT EXISTS mmk_bank_accounts (
                     id {pk_auto},
-                    bank_name TEXT NOT NULL UNIQUE,
-                    account_number TEXT NOT NULL,
+                    bank_name TEXT NOT NULL,
+                    account_number TEXT NOT NULL UNIQUE,
                     account_holder TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -222,4 +226,59 @@ class Database:
 
             await asyncio.to_thread(self._run, work)
 
+        await self._migrate_mmk_accounts_allow_dupe_names()
+
         logger.info("Database schema ready (%s)", "postgres" if self.is_postgres else "sqlite")
+
+    async def _migrate_mmk_accounts_allow_dupe_names(self) -> None:
+        """Older databases created mmk_bank_accounts with ``bank_name UNIQUE``,
+        which silently overwrote a second account registered under the same
+        display name. Migrate them in place to the new identity (unique
+        account_number, non-unique bank_name). Idempotent and a no-op on
+        databases already created with the current schema.
+        """
+        if self.is_postgres:
+            def work(conn):
+                cur = conn.cursor()
+                # Drop the auto-named UNIQUE(bank_name) constraint if present,
+                # and guarantee UNIQUE(account_number) for ON CONFLICT.
+                cur.execute(
+                    "ALTER TABLE mmk_bank_accounts "
+                    "DROP CONSTRAINT IF EXISTS mmk_bank_accounts_bank_name_key"
+                )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mmk_account_number "
+                    "ON mmk_bank_accounts(account_number)"
+                )
+
+            await asyncio.to_thread(self._run, work)
+            return
+
+        def work(conn):
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='mmk_bank_accounts'"
+            ).fetchone()
+            if not row or "bank_name TEXT NOT NULL UNIQUE" not in row[0]:
+                return  # fresh schema or already migrated
+            logger.info("Migrating mmk_bank_accounts to allow duplicate bank names")
+            cur.execute(
+                """CREATE TABLE mmk_bank_accounts_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        bank_name TEXT NOT NULL,
+                        account_number TEXT NOT NULL UNIQUE,
+                        account_holder TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )"""
+            )
+            cur.execute(
+                "INSERT INTO mmk_bank_accounts_new "
+                "(id, bank_name, account_number, account_holder, created_at, updated_at) "
+                "SELECT id, bank_name, account_number, account_holder, created_at, updated_at "
+                "FROM mmk_bank_accounts"
+            )
+            cur.execute("DROP TABLE mmk_bank_accounts")
+            cur.execute("ALTER TABLE mmk_bank_accounts_new RENAME TO mmk_bank_accounts")
+
+        await asyncio.to_thread(self._run, work)

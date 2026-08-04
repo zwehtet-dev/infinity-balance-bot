@@ -18,6 +18,7 @@ import logging
 import traceback
 
 from telegram import Update
+from telegram.error import NetworkError, RetryAfter, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import ConfigError, Settings
@@ -49,9 +50,14 @@ DEFAULT_USDT_WALLETS = [
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    if update is None and isinstance(error, (NetworkError, TimedOut, RetryAfter)):
+        logger.warning("Transient Telegram polling error: %s", error)
+        return
+
     logger.error(
         "Unhandled exception while processing update:\n%s",
-        "".join(traceback.format_exception(context.error)) if context.error else "unknown",
+        "".join(traceback.format_exception(error)) if error else "unknown",
     )
     services: Services = context.application.bot_data.get(SERVICES_KEY)
     if services:
@@ -119,6 +125,7 @@ def main() -> None:
         raise SystemExit(f"Configuration error: {e}")
 
     timeout = settings.telegram_timeout_seconds
+    poll_timeout = max(1, int(min(timeout, 30.0)))
     app = (
         Application.builder()
         .token(settings.telegram_bot_token)
@@ -163,6 +170,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     app.run_polling(
+        timeout=poll_timeout,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=settings.drop_pending_updates,
         close_loop=False,

@@ -136,19 +136,27 @@ class Services:
 
     async def mmk_banks_with_accounts(self, balances: Balances) -> list[dict]:
         """Balance MMK banks joined with their registered account details,
-        shaped for confidence-scored OCR matching."""
-        result = []
-        for idx, bank in enumerate(balances.mmk, 1):
-            account = await self.bank_accounts.get_mmk(bank.bank_name)
-            result.append(
-                {
-                    "bank_id": idx,
-                    "bank_name": bank.bank_name,
-                    "account_number": account["account_number"] if account else "0000",
-                    "account_holder": account["account_holder"] if account else "Unknown",
-                    "bank_obj": bank,
-                }
-            )
+        shaped for confidence-scored OCR matching.
+
+        A single balance line may be backed by several physical accounts that
+        share its display name (e.g. two Kpay accounts under "San(Kpay P)").
+        Each account becomes its own candidate that resolves back to the same
+        balance bank, so a receipt from *either* account is recognized.
+        ``bank_id`` is contiguous (1..N) so callers can index the returned list.
+        Banks with no registered account are omitted (nothing to match on).
+        """
+        result: list[dict] = []
+        for bank in balances.mmk:
+            for account in await self.bank_accounts.get_mmk_all(bank.bank_name):
+                result.append(
+                    {
+                        "bank_id": len(result) + 1,
+                        "bank_name": bank.bank_name,
+                        "account_number": account["account_number"],
+                        "account_holder": account["account_holder"],
+                        "bank_obj": bank,
+                    }
+                )
         return result
 
     async def usdt_wallets_for_ocr(self) -> list[dict]:
@@ -173,17 +181,16 @@ class Services:
         when available; falls back to visual-only detection otherwise.
         """
         candidates = await self.mmk_banks_with_accounts(balances)
-        with_accounts = [c for c in candidates if c["account_number"] != "0000"]
 
-        if with_accounts:
-            match = await self.ocr.match_mmk_receipt(image_base64, with_accounts)
+        if candidates:
+            match = await self.ocr.match_mmk_receipt(image_base64, candidates)
             if not match:
                 return None
             best_id, best_conf = match.best()
-            if best_id and 1 <= best_id <= len(with_accounts):
+            if best_id and 1 <= best_id <= len(candidates):
                 return MmkOcrResult(
                     amount=match.amount,
-                    bank=with_accounts[best_id - 1]["bank_obj"],
+                    bank=candidates[best_id - 1]["bank_obj"],
                     confidence=best_conf,
                 )
             return None

@@ -89,11 +89,15 @@ class BankAccountRepo:
     # --- MMK ---------------------------------------------------------------
 
     async def set_mmk(self, bank_name: str, account_number: str, account_holder: str) -> None:
+        # Identity is the account_number, not the display name: registering a
+        # new account under an existing bank_name ADDS a row (e.g. a second
+        # Kpay account), while re-registering the same account_number updates
+        # it in place — a duplicate name never overwrites another account.
         await self._db.execute(
             """INSERT INTO mmk_bank_accounts (bank_name, account_number, account_holder, updated_at)
                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT (bank_name)
-               DO UPDATE SET account_number = excluded.account_number,
+               ON CONFLICT (account_number)
+               DO UPDATE SET bank_name = excluded.bank_name,
                              account_holder = excluded.account_holder,
                              updated_at = excluded.updated_at""",
             (bank_name, account_number, account_holder),
@@ -101,10 +105,21 @@ class BankAccountRepo:
 
     async def get_mmk(self, bank_name: str) -> Optional[dict[str, str]]:
         row = await self._db.fetchone(
-            "SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = ?",
+            "SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = ? "
+            "ORDER BY id",
             (bank_name,),
         )
         return {"account_number": row[0], "account_holder": row[1]} if row else None
+
+    async def get_mmk_all(self, bank_name: str) -> list[dict[str, str]]:
+        """All physical accounts registered under one display name — a bank
+        line may be backed by several accounts (e.g. two Kpay accounts)."""
+        rows = await self._db.fetchall(
+            "SELECT account_number, account_holder FROM mmk_bank_accounts WHERE bank_name = ? "
+            "ORDER BY id",
+            (bank_name,),
+        )
+        return [{"account_number": r[0], "account_holder": r[1]} for r in rows]
 
     async def list_mmk(self) -> list[dict[str, str]]:
         rows = await self._db.fetchall(
