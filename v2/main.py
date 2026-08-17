@@ -32,13 +32,14 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log every API call
 logger = logging.getLogger(__name__)
 
-# Seed data used only when the account tables are completely empty.
+# MMK defaults are keyed by account_number, so duplicate display names are
+# valid: both San(Kpay P) accounts feed the same balance line.
 DEFAULT_MMK_BANKS = [
+    ("San(AYA)", "40038204256", "CHAW SU THU ZAR"),
     ("San(CB)", "0225100900026042", "Chaw Su Thu Zar"),
     ("San(KBZ)", "27251127201844001", "CHAW SU THU ZAR"),
-    ("San(Yoma)", "007011118014339", "Daw Chaw Su Thu Zar"),
     ("San(Kpay P)", "300948464", "Chaw Su"),
-    ("San(AYA)", "40038204256", "CHAW SU THU ZAR"),
+    ("San(Yoma)", "007011118014339", "Daw Chaw Su Thu Zar"),
     ("San(Kpay P)", "09420093777", "San Wint Htal"),
 ]
 DEFAULT_USDT_WALLETS = [

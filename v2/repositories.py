@@ -168,10 +168,15 @@ class BankAccountRepo:
     # --- Seeding -------------------------------------------------------------
 
     async def seed_defaults(self, mmk: list[tuple], usdt: list[tuple]) -> None:
-        """Seed initial accounts only into an *empty* table.
+        """Seed startup defaults.
 
-        v1 re-inserted defaults on every startup, silently resurrecting
-        accounts an admin had deliberately removed.
+        MMK accounts are keyed by account_number, not bank_name: one balance
+        line can be backed by several physical accounts. Insert any missing
+        default account numbers so new multi-account defaults are picked up by
+        existing deployments without collapsing duplicate display names.
+
+        USDT wallets remain keyed by bank_name and are only seeded into an empty
+        table, preserving the previous admin-controlled behavior.
         """
         row = await self._db.fetchone("SELECT COUNT(*) FROM mmk_bank_accounts")
         if row and row[0] == 0 and mmk:
@@ -180,6 +185,19 @@ class BankAccountRepo:
                 mmk,
             )
             logger.info("Seeded %d default MMK bank accounts", len(mmk))
+        elif mmk:
+            inserted = 0
+            for bank_name, account_number, account_holder in mmk:
+                inserted += await self._db.execute(
+                    """INSERT INTO mmk_bank_accounts
+                           (bank_name, account_number, account_holder)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT (account_number) DO NOTHING""",
+                    (bank_name, account_number, account_holder),
+                )
+            if inserted:
+                logger.info("Added %d missing default MMK bank accounts", inserted)
+
         row = await self._db.fetchone("SELECT COUNT(*) FROM usdt_bank_accounts")
         if row and row[0] == 0 and usdt:
             await self._db.executemany(
